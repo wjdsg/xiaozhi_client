@@ -193,9 +193,10 @@ $('mainBtn').addEventListener('click',async ()=>{
 
 async function startListen(){
   if(listening||!ws||ws.readyState!==1) return; listening=true;
+  // 先发start_listening让桥接就绪, 再启动麦克风
+  ws.send(JSON.stringify({type:'start_listening'}));player.reset();clearChat();
   try{mic=new MicCapture(buf=>{if(ws&&ws.readyState===1)ws.send(buf);});await mic.start();}
   catch(e){$('hintText').textContent='⚠ 请允许麦克风权限';listening=false;return;}
-  ws.send(JSON.stringify({type:'start_listening'}));player.reset();clearChat();
 }
 function stopListen(){listening=false;if(mic){mic.stop();mic=null;}if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:'stop_listening'}));}
 
