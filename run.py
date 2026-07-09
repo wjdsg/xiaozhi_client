@@ -1,10 +1,9 @@
 # Author: mjw
-# Date: 2026-07-07
+# Date: 2026-07-09
 """
-台灯终端 - AI学伴语音对话入口脚本
+台灯终端 - AI学伴语音对话 (AEC版)
 一键启动: python run.py
-Python端用sounddevice直接操作硬件麦克风/扬声器
-浏览器只做遥控器 (发命令、看状态、看文字)
+浏览器做AEC音频采集+播放, Python只做Opus编解码+协议转发
 """
 
 import asyncio
@@ -15,7 +14,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge import WebBridge
 
-# ==================== 硬编码配置 (无需用户修改) ====================
+# ==================== 硬编码配置 ====================
 CONFIG = {
     "xiaozhi_ws_url": "ws://10.150.101.33:5000/xiaozhi/v1/",
     "xiaozhi_token": "test-token",
@@ -28,10 +27,10 @@ CONFIG = {
 
 async def main():
     print("=" * 50)
-    print("  台灯终端 - AI学伴语音对话")
+    print("  台灯终端 - AI学伴 (AEC版)")
     print("=" * 50)
-    print(f"> xiaozhi服务: {CONFIG['xiaozhi_ws_url']}")
-    print(f"> 本地端口:   {CONFIG['local_port']}")
+    print(f"> xiaozhi: {CONFIG['xiaozhi_ws_url']}")
+    print(f"> 本地:   http://{CONFIG['local_host']}:{CONFIG['local_port']}")
     print()
 
     bridge = WebBridge(CONFIG)
@@ -39,32 +38,22 @@ async def main():
     print("> 启动Web服务...")
     await bridge.start_server()
 
-    print("> 初始化音频设备(麦克风+扬声器)...")
-    await bridge.start_audio()
-
-    print("> 启动唤醒词检测...")
-    ww_ok = await bridge.start_wake_word()
-    if ww_ok:
-        print("> ✓ 唤醒词就绪, 说「小智小智」即可唤醒")
-    else:
-        print("> 唤醒词未启用, 需手动点击按钮")
-
     url = f"http://{CONFIG['local_host']}:{CONFIG['local_port']}"
-    print(f"> 打开浏览器: {url}")
     webbrowser.open(url)
+    print(f"> 浏览器已打开: {url}")
 
-    print("> 连接xiaozhi服务...")
+    print("> 连接xiaozhi...")
     ok = await bridge.connect_xiaozhi()
     if ok:
-        print("> ✓ 就绪, 点击浏览器按钮开始对话")
+        print("> 就绪! 点击[开始对话]按钮, 浏览器会请求麦克风权限")
     else:
-        print("> ✗ xiaozhi连接失败, 请检查网络")
+        print("> xiaozhi连接失败, 检查网络")
 
-    print("> 按 Ctrl+C 退出...")
+    print("> Ctrl+C 退出")
     try:
         await bridge.wait_closed()
     except KeyboardInterrupt:
-        print("\n> 正在关闭...")
+        print("\n> 关闭中...")
     finally:
         await bridge.close()
 
