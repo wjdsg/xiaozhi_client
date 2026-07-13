@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 tts_cache.pkl
 farewell_cache.opus
+log

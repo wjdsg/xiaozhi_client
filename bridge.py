@@ -23,7 +23,7 @@ from aiohttp import web, WSMsgType
 sys.path.insert(0, r"D:\qxyy\py-xiaozhi")
 from src.utils.opus_loader import setup_opus
 from src.utils.config_manager import ConfigManager
-from src.constants.constants import DeviceState
+from src.constants.constants import DeviceState, AudioConfig
 
 setup_opus()  # 先加载opus.dll, 再导入依赖opuslib的模块
 
@@ -155,6 +155,19 @@ class WebBridge:
         self._companion_task = None
         self._voice_start_time = 0.0
         self._wake_detect_time = 0.0
+        self._last_send_time = 0.0
+        self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
+        self._log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
+
+    def _log(self, msg):
+        t = time.strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{t}] {msg}\n"
+        try:
+            with open(self._log_path, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+        except Exception as e:
+            print(f"[Bridge] 日志写入失败: {e}")
 
     def _setup_routes(self):
         self.app.router.add_get("/", self._handle_index)
@@ -167,6 +180,7 @@ class WebBridge:
         site = web.TCPSite(runner, self.config["local_host"], self.config["local_port"])
         await site.start()
         print(f"[Bridge] HTTP服务: http://{self.config['local_host']}:{self.config['local_port']}")
+        self._log("服务启动")
 
     async def start_audio(self):
         """初始化硬件音频: 麦克风采集 + 扬声器播放"""
@@ -347,6 +361,7 @@ class WebBridge:
                 await self._broadcast_json({"type": "error", "message": "xiaozhi未连接"})
                 return
             self._keep_listening = True
+            self._speech_start_time = 0.0  # 重置, 等首帧音频触发
             await self.xiaozhi.send_text(json.dumps(
                 {"type": "listen", "state": "start", "mode": "auto"}))
             await self._set_state(DeviceState.LISTENING)
@@ -388,6 +403,8 @@ class WebBridge:
             return
         # 直接在事件循环线程发送，不创建额外 task
         # 对齐 py-xiaozhi 的 _schedule_send_audio → protocol.send_audio
+        if not self._speech_start_time:
+            self._speech_start_time = time.time()
         self._main_loop.call_soon_threadsafe(
             lambda: asyncio.ensure_future(self.xiaozhi.send_audio(opus_data))
         )
@@ -396,9 +413,11 @@ class WebBridge:
     def _on_xiaozhi_json(self, data):
         t = data.get("type", "")
         if t == "stt":
-            if self._wake_detect_time and data.get("text"):
-                sr_latency = time.time() - self._wake_detect_time
-                print(f"[Bridge] 唤醒→首字识别: {sr_latency:.2f}s text={data.get('text','')[:20]}")
+            if self._speech_start_time and data.get("text"):
+                asr_latency = time.time() - self._speech_start_time
+                msg = f"首音→STT返回: {asr_latency:.2f}s text={data.get('text','')[:30]}"
+                print(f"[Log] {msg}")
+                self._log(msg)
             asyncio.create_task(self._broadcast_json({
                 "type": "stt", "text": data.get("text", ""),
             }))
@@ -410,9 +429,15 @@ class WebBridge:
         elif t == "tts":
             state = data.get("state", "")
             text = data.get("text", "")
-            if state == "start" and self._wake_detect_time:
-                tts_latency = time.time() - self._wake_detect_time
-                print(f"[Bridge] 唤醒→首句播报: {tts_latency:.2f}s")
+            if state == "start" and self._speech_start_time:
+                tts_latency = time.time() - self._speech_start_time
+                msg = f"首音→首句播报: {tts_latency:.2f}s text={text[:30]}"
+                print(f"[Log] {msg}")
+                self._log(msg)
+            # 处理 sentence_start 里的文字 (字幕)
+            if state == "sentence_start" and data.get("text"):
+                asyncio.create_task(self._broadcast_json(
+                    {"type": "tts", "state": state, "text": data.get("text")}))
             print(f"[Bridge] TTS: {state}" + (f" text={text[:40]}..." if text else ""))
             if state == "start":
                 self._current_opus_buf = []
@@ -613,26 +638,52 @@ class WebBridge:
         await self._broadcast_json({"type": "state", "state": "idle"})
 
     # ========== 闹钟记时 ==========
+    async def _play_alarm_sound(self):
+        """用台灯扬声器播放闹铃mp3 (FFmpeg解码为目标采样率PCM → codec直推)"""
+        mp3_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clock-alarm-1.mp3")
+        if not self.codec or not os.path.exists(mp3_path):
+            print(f"[Alarm] 闹铃文件缺失或音频未就绪: {mp3_path}")
+            return
+        sample_rate = AudioConfig.OUTPUT_SAMPLE_RATE
+        frame_size = AudioConfig.OUTPUT_FRAME_SIZE  # 单帧样本数(单声道)
+        cmd = [
+            "ffmpeg", "-nostdin", "-loglevel", "quiet",
+            "-i", mp3_path,
+            "-f", "s16le", "-acodec", "pcm_s16le",
+            "-ac", "1", "-ar", str(sample_rate), "pipe:1",
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            pcm_bytes, _ = await proc.communicate()
+        except FileNotFoundError:
+            print("[Alarm] 未找到ffmpeg, 无法播放闹铃")
+            return
+        except Exception as e:
+            print(f"[Alarm] 解码失败: {e}")
+            return
+        if not pcm_bytes:
+            print("[Alarm] 解码结果为空")
+            return
+        samples = np.frombuffer(pcm_bytes, dtype=np.int16)
+        print(f"[Alarm] 播放闹铃: {len(samples)}样本 @ {sample_rate}Hz")
+        for i in range(0, len(samples), frame_size):
+            frame = samples[i:i + frame_size]
+            await self.codec.write_pcm_direct(frame.copy())
+
     async def start_timer(self, minutes, label=""):
-        seconds = int(minutes * 60)
+        total_seconds = int(minutes * 60)
         label = label or f"{minutes}分钟"
-        print(f"[Timer] 启动: {label} ({seconds}s)")
-        await self._broadcast_json({"type": "timer_start", "seconds": seconds, "label": label})
-        # 倒计时
-        while seconds > 0 and self._device_state == DeviceState.IDLE:
-            await asyncio.sleep(1)
-            seconds -= 1
-        if seconds <= 0:
-            # 时间到: 用缓存的最后一条语音做提醒
-            if self._tts_cache:
-                text, opus_frames = self._tts_cache[-1]
-                await self._broadcast_json({"type": "timer_done", "label": label})
-                await self._broadcast_json({"type": "state", "state": "speaking"})
-                for opus in opus_frames:
-                    await self.codec.write_audio(opus)
-                await self._broadcast_json({"type": "state", "state": "idle"})
-            else:
-                await self._broadcast_json({"type": "timer_done", "label": label})
+        print(f"[Timer] 启动: {label} ({total_seconds}s)")
+        await self._broadcast_json({"type": "timer_start", "seconds": total_seconds, "label": label})
+        # 用墙钟计时, 独立于设备状态(对话/聆听/播报时照常倒计时)
+        deadline = time.monotonic() + total_seconds
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+        # 时间到: 用台灯扬声器播放闹铃
+        print(f"[Timer] 时间到: {label}")
+        await self._broadcast_json({"type": "timer_done", "label": label})
+        await self._play_alarm_sound()
 
     # ========== 广播 ==========
     async def _broadcast_json(self, data):
