@@ -6,6 +6,7 @@ bridge.py - AI学伴Web控制桥接
 浏览器只做远程遥控 (发命令、看状态、看文字)，不传音频
 """
 
+from collections import deque
 import asyncio
 import json
 import os
@@ -19,8 +20,8 @@ import numpy as np
 import websockets
 from aiohttp import web, WSMsgType
 
-# 导入 py-xiaozhi 核心模块 — 必须先加载opus DLL再导入audio_codec
-sys.path.insert(0, r"D:\qxyy\py-xiaozhi")
+# 导入本地精简版核心模块(已从py-xiaozhi抽取到本项目src/) — 必须先加载opus DLL再导入audio_codec
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.utils.opus_loader import setup_opus
 from src.utils.config_manager import ConfigManager
 from src.constants.constants import DeviceState, AudioConfig
@@ -28,6 +29,7 @@ from src.constants.constants import DeviceState, AudioConfig
 setup_opus()  # 先加载opus.dll, 再导入依赖opuslib的模块
 
 from src.audio_codecs.audio_codec import AudioCodec  # import opuslib, 此时DLL已就绪
+from src.audio_codecs.energy_detector import EnergyDetector
 
 # ==================== 常量 ====================
 SAMPLE_RATE_IN = 16000
@@ -148,6 +150,7 @@ class WebBridge:
         self._main_loop = asyncio.get_event_loop()  # 保存主事件循环供音频线程使用
         self._wake_word_detector = None
         self._wake_word_enabled = False
+        self._energy_detector: EnergyDetector | None = None
         self._idle_timer = None
         self._tts_cache = []            # [(text, [opus_bytes, ...]), ...]
         self._current_opus_buf = []     # 当前句子的Opus帧
@@ -157,6 +160,7 @@ class WebBridge:
         self._wake_detect_time = 0.0
         self._last_send_time = 0.0
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
+        self._pre_listen_opus = deque(maxlen=50)  # 打断前缓存的 Opus 帧(约1秒)
         self._log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
 
     def _log(self, msg):
@@ -197,6 +201,16 @@ class WebBridge:
         vad = _VAD()
         vad.bridge = self
         self.codec.add_audio_listener(vad)
+        # 端侧能量检测器：用于 TTS 播放时的语音打断
+        cfg = ConfigManager.get_instance()
+        aec_opts = cfg.get_config("AEC_OPTIONS", {})
+        self._energy_detector = EnergyDetector(
+            threshold_rms=aec_opts.get("ENERGY_THRESHOLD_RMS", 0.008),
+            hold_frames=aec_opts.get("ENERGY_HOLD_FRAMES", 12),
+            cooldown_ms=aec_opts.get("ENERGY_COOLDOWN_MS", 800),
+        )
+        self._energy_detector.set_interrupt_callback(self._trigger_energy_interrupt)
+        self.codec.add_audio_listener(self._energy_detector)
         print("[Bridge] 音频设备就绪 ✓")
 
     async def start_wake_word(self):
@@ -207,6 +221,9 @@ class WebBridge:
             _local_models = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "models")
             config = ConfigManager.get_instance()
             config.update_config("WAKE_WORD_OPTIONS.MODEL_PATH", _local_models)
+            # KWS模型很小, 单线程推理比多线程更快(实测4线程24ms→1线程14ms)且省CPU,
+            # 减少与主线程Opus编解码/WebSocket的CPU争抢
+            config.update_config("WAKE_WORD_OPTIONS.NUM_THREADS", 1)
 
             from src.audio_processing.wake_word_detect import WakeWordDetector
             self._wake_word_detector = WakeWordDetector()
@@ -269,6 +286,31 @@ class WebBridge:
         self._keep_listening = True
         await self.xiaozhi.send_text(json.dumps(
             {"type": "listen", "state": "start", "mode": "auto"}))
+        await self._set_state(DeviceState.LISTENING)
+        await self._broadcast_json({"type": "state", "state": "listening"})
+
+    def _trigger_energy_interrupt(self):
+        """音频线程回调 -> 调度到主事件循环执行打断逻辑"""
+        self._main_loop.call_soon_threadsafe(
+            lambda: asyncio.ensure_future(self._on_energy_interrupt())
+        )
+
+    async def _on_energy_interrupt(self):
+        if self._device_state != DeviceState.SPEAKING:
+            return
+        print("[Bridge] 能量打断: 检测到用户语音, 停止TTS播报")
+        if self.xiaozhi and self.xiaozhi.connected:
+            await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
+        if self.codec:
+            await self.codec.clear_audio_queue()
+        self._keep_listening = True
+        await self.xiaozhi.send_text(json.dumps(
+            {"type": "listen", "state": "start", "mode": "auto"}))
+        # flush 打断前缓存的 Opus 帧, 确保开头语音不丢失
+        buf = list(self._pre_listen_opus)
+        self._pre_listen_opus.clear()
+        for opus_data in buf:
+            await self.xiaozhi.send_audio(opus_data)
         await self._set_state(DeviceState.LISTENING)
         await self._broadcast_json({"type": "state", "state": "listening"})
 
@@ -397,6 +439,9 @@ class WebBridge:
         """AudioCodec回调(音频线程): 麦克风采集→Opus编码→发送到xiaozhi
         对齐 py-xiaozhi AudioPlugin._on_encoded_audio (audio.py:193)
         """
+        if self._device_state == DeviceState.SPEAKING:
+            self._pre_listen_opus.append(opus_data)
+            return
         if self._device_state != DeviceState.LISTENING:
             return
         if not self.xiaozhi or not self.xiaozhi.connected:
@@ -469,17 +514,87 @@ class WebBridge:
             print(f"[Bridge] 未知消息类型: {t}, keys={list(data.keys())}")
 
     def _handle_mcp(self, data):
-        """处理服务端MCP/工具调用消息: 闹钟意图识别"""
+        """处理服务端 MCP JSON-RPC 2.0 消息: initialize / tools/list / tools/call"""
         payload = data.get("payload", {})
-        method = payload.get("method", "") or data.get("method", "")
-        params = payload.get("params", {}) or data.get("params", {})
-        name = params.get("name", "") or payload.get("name", "")
-        args = params.get("arguments", {}) or payload.get("arguments", {})
+        method = payload.get("method", "")
+        msg_id = payload.get("id")
+        params = payload.get("params", {})
+        print(f"[Bridge] MCP: method={method}, id={msg_id}")
+
+        if method == "initialize":
+            asyncio.create_task(self._mcp_initialize(msg_id))
+        elif method == "tools/list":
+            asyncio.create_task(self._mcp_tools_list(msg_id))
+        elif method == "tools/call":
+            asyncio.create_task(self._mcp_tools_call(msg_id, params))
+        else:
+            print(f"[Bridge] MCP: 未实现的方法 {method}")
+
+    # ========== MCP 协议处理器 ==========
+    async def _mcp_reply(self, msg_id, result=None, error_msg=None):
+        """发送 JSON-RPC 2.0 响应回 xiaozhi 服务端"""
+        payload = {"jsonrpc": "2.0", "id": msg_id}
+        if error_msg:
+            payload["error"] = {"message": error_msg}
+        else:
+            payload["result"] = result if result is not None else {}
+        if self.xiaozhi and self.xiaozhi.connected:
+            await self.xiaozhi.send_text(json.dumps({"type": "mcp", "payload": payload}))
+
+    async def _mcp_initialize(self, msg_id):
+        await self._mcp_reply(msg_id, {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "台灯终端", "version": "1.0.0"},
+        })
+
+    async def _mcp_tools_list(self, msg_id):
+        tools = [{
+            "name": "set_timer",
+            "description": (
+                "设置一个倒计时闹钟,到时间后台灯扬声器会播放闹铃声提醒用户。"
+                "当用户想让台灯帮ta定时提醒时使用,例如'帮我设5分钟闹钟'、'倒计时10分钟'、"
+                "'提醒我15分钟后休息'、'定一个25分钟的番茄钟'等。"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "minutes": {
+                        "type": "number",
+                        "description": "倒计时的分钟数,必须是正整数,如5表示5分钟",
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "闹钟标签,可选,如'休息时间到'",
+                    },
+                },
+                "required": ["minutes"],
+            },
+        }]
+        await self._mcp_reply(msg_id, {"tools": tools})
+
+    async def _mcp_tools_call(self, msg_id, params):
+        name = params.get("name", "")
+        args = params.get("arguments", {})
         if isinstance(args, str):
-            try: args = json.loads(args)
-            except: args = {}
-        print(f"[Bridge] MCP: method={method}, name={name}, args={json.dumps(args, ensure_ascii=False)}")
-        self._try_start_timer(name, args)
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        print(f"[Bridge] MCP tools/call: {name}, args={json.dumps(args, ensure_ascii=False)}")
+        if name == "set_timer":
+            minutes = float(args.get("minutes", 0))
+            label = args.get("label", "") or f"{int(minutes)}分钟"
+            if minutes <= 0:
+                await self._mcp_reply(msg_id, error_msg="分钟数必须大于0")
+                return
+            asyncio.create_task(self.start_timer(minutes, label))
+            result_text = f"已设置{label}闹钟,{int(minutes)}分钟后提醒"
+            await self._mcp_reply(msg_id, {
+                "content": [{"type": "text", "text": result_text}],
+            })
+        else:
+            await self._mcp_reply(msg_id, error_msg=f"未知工具: {name}")
 
     def _handle_function_call(self, data):
         """处理OpenAI风格的function_call消息"""
@@ -548,15 +663,23 @@ class WebBridge:
         self._device_state = state
         if state == DeviceState.IDLE:
             self._start_idle_timer()
+            self._pre_listen_opus.clear()
             if self._wake_word_detector:
                 self._wake_word_detector.paused = False
+            if self._energy_detector:
+                self._energy_detector.disable()
         elif state == DeviceState.LISTENING:
             self._cancel_idle_timer()
+            self._pre_listen_opus.clear()
             if self._wake_word_detector:
                 self._wake_word_detector.paused = True
+            if self._energy_detector:
+                self._energy_detector.disable()
         elif state == DeviceState.SPEAKING:
             if self._wake_word_detector:
-                self._wake_word_detector.paused = False  # 允许语音打断
+                self._wake_word_detector.paused = False
+            if self._energy_detector:
+                self._energy_detector.enable()  # 允许语音打断
 
     def _start_idle_timer(self):
         self._cancel_idle_timer()

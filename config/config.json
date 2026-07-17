@@ -1,0 +1,81 @@
+{
+  "SYSTEM_OPTIONS": {
+    "CLIENT_ID": null,
+    "DEVICE_ID": null,
+    "NETWORK": {
+      "OTA_VERSION_URL": "http://10.73.171.49:8002/xiaozhi/ota/",
+      "WEBSOCKET_URL": "ws://10.73.171.49:8000/xiaozhi/v1/",
+      "WEBSOCKET_ACCESS_TOKEN": null,
+      "MQTT_INFO": null,
+      "ACTIVATION_VERSION": "v1",
+      "AUTHORIZATION_URL": "https://xiaozhi.me/"
+    }
+  },
+  "WAKE_WORD_OPTIONS": {
+    "USE_WAKE_WORD": true,
+    "MODEL_PATH": "D:\\qxyy\\taideng_zhongduan\\models",
+    "NUM_THREADS": 1,
+    "PROVIDER": "cpu",
+    "MAX_ACTIVE_PATHS": 2,
+    "KEYWORDS_SCORE": 1.8,
+    "KEYWORDS_THRESHOLD": 0.2,
+    "NUM_TRAILING_BLANKS": 1
+  },
+  "CAMERA": {
+    "camera_index": 0,
+    "frame_width": 640,
+    "frame_height": 480,
+    "fps": 30,
+    "Local_VL_url": "http://10.73.171.49:8003/mcp/vision/explain",
+    "VLapi_key": "",
+    "models": "glm-4v-plus"
+  },
+  "SHORTCUTS": {
+    "ENABLED": true,
+    "MANUAL_PRESS": {
+      "modifier": "ctrl",
+      "key": "j",
+      "description": "按住说话"
+    },
+    "AUTO_TOGGLE": {
+      "modifier": "ctrl",
+      "key": "k",
+      "description": "自动对话"
+    },
+    "ABORT": {
+      "modifier": "ctrl",
+      "key": "q",
+      "description": "中断对话"
+    },
+    "MODE_TOGGLE": {
+      "modifier": "ctrl",
+      "key": "m",
+      "description": "切换模式"
+    },
+    "WINDOW_TOGGLE": {
+      "modifier": "ctrl",
+      "key": "w",
+      "description": "显示/隐藏窗口"
+    }
+  },
+  "AEC_OPTIONS": {
+    "ENABLED": true,
+    "BUFFER_MAX_LENGTH": 200,
+    "FRAME_DELAY": 3,
+    "FILTER_LENGTH_RATIO": 0.4,
+    "ENABLE_PREPROCESS": true,
+    "ENERGY_THRESHOLD_RMS": 0.004,
+    "ENERGY_HOLD_FRAMES": 7,
+    "ENERGY_COOLDOWN_MS": 800
+  },
+  "AUDIO_DEVICES": {
+    "input_device_id": 9,
+    "input_device_name": "麦克风阵列 (英特尔® 智音技术)",
+    "output_device_id": 8,
+    "output_device_name": "扬声器 (Realtek(R) Audio)",
+    "input_sample_rate": 48000,
+    "output_sample_rate": 48000,
+    "input_channels": 2,
+    "output_channels": 2
+  }
+}

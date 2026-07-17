@@ -1,0 +1,22 @@
+# 台灯终端 - AI学伴 依赖清单
+# Author: mjw
+# Date: 2026-07-13
+# Python 3.10 (conda base)
+# 安装: pip install -r requirements.txt
+# 注: opuslib 需要 opus 动态库, 本项目已自带 libs/opus.dll (由 setup_opus 加载)
+
+# Web 服务与 WebSocket
+aiohttp==3.12.13
+websockets==16.0
+
+# 音频采集/播放/编解码/重采样
+sounddevice==0.5.3
+opuslib==3.0.1
+soxr==0.5.0.post1
+numpy==2.2.6
+
+# 唤醒词检测 (Sherpa-ONNX KeywordSpotter)
+sherpa-onnx==1.12.19
+
+# 日志彩色输出
+colorlog==6.9.0
