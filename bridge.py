@@ -155,6 +155,7 @@ class WebBridge:
         self._tts_cache = []            # [(text, [opus_bytes, ...]), ...]
         self._current_opus_buf = []     # 当前句子的Opus帧
         self._current_tts_text = ""
+        self._timer_task: asyncio.Task | None = None  # 当前闹钟任务
         self._companion_task = None
         self._voice_start_time = 0.0
         self._wake_detect_time = 0.0
@@ -487,6 +488,9 @@ class WebBridge:
             if state == "start":
                 self._current_opus_buf = []
                 self._current_tts_text = text or ""
+                # 兜底：LLM 没走 function_call 时, 从 TTS 文本解析闹钟命令
+                if text:
+                    self._try_parse_timer_from_text(text)
                 asyncio.create_task(self._set_state(DeviceState.SPEAKING))  # 切到SPEAKING, 唤醒词仍活跃可打断
                 asyncio.create_task(self._broadcast_json(
                     {"type": "state", "state": "speaking"}))
@@ -570,6 +574,18 @@ class WebBridge:
                 },
                 "required": ["minutes"],
             },
+        },
+        {
+            "name": "cancel_timer",
+            "description": (
+                "取消当前正在运行的倒计时闹钟。"
+                "当用户说'关闭闹钟'、'取消闹钟'、'不用提醒了'、'把闹钟关掉'时使用。"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
         }]
         await self._mcp_reply(msg_id, {"tools": tools})
 
@@ -590,6 +606,16 @@ class WebBridge:
                 return
             asyncio.create_task(self.start_timer(minutes, label))
             result_text = f"已设置{label}闹钟,{int(minutes)}分钟后提醒"
+            await self._mcp_reply(msg_id, {
+                "content": [{"type": "text", "text": result_text}],
+            })
+        elif name == "cancel_timer":
+            if self._timer_task and not self._timer_task.done():
+                self._timer_task.cancel()
+                self._timer_task = None
+                result_text = "闹钟已取消"
+            else:
+                result_text = "当前没有正在运行的闹钟"
             await self._mcp_reply(msg_id, {
                 "content": [{"type": "text", "text": result_text}],
             })
@@ -623,6 +649,36 @@ class WebBridge:
         label = args.get("label", "") or args.get("name", "") or f"{int(minutes)}分钟"
         print(f"[Bridge] 意图识别闹钟: {label}")
         asyncio.create_task(self.start_timer(minutes, label))
+
+    def _parse_cn_number(self, s):
+        cn = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+        if not s:
+            return None
+        if "十" in s:
+            parts = s.split("十", 1)
+            left = cn.get(parts[0], 1) if parts[0] else 1
+            right = cn.get(parts[1], 0) if len(parts) > 1 and parts[1] else 0
+            return left * 10 + right
+        val = cn.get(s)
+        return val if val is not None else (0.5 if s == "半" else None)
+
+    def _try_parse_timer_from_text(self, text):
+        """从 LLM 文本回复中解析闹钟命令, 兜底 function_call 失败的情况"""
+        import re
+        patterns = [
+            (r"(\d+)\s*分钟", lambda m: int(m.group(1))),
+            (r"(\d+)\s*分\s*钟", lambda m: int(m.group(1))),
+            (r"([一二三四五六七八九十半]+)\s*分钟", lambda m: self._parse_cn_number(m.group(1))),
+            (r"(\d+)\s*分\b", lambda m: int(m.group(1))),
+        ]
+        for pattern, extract in patterns:
+            match = re.search(pattern, text)
+            if match:
+                minutes = extract(match)
+                if minutes is not None and minutes > 0 and minutes <= 120:
+                    print(f"[Bridge] 文本识别闹钟: {minutes}分钟 (原文: {text[:50]})")
+                    asyncio.create_task(self.start_timer(minutes))
+                    return
 
     async def _on_xiaozhi_audio(self, opus_data):
         """xiaozhi返回TTS音频 → 扬声器播放"""
@@ -795,18 +851,23 @@ class WebBridge:
             await self.codec.write_pcm_direct(frame.copy())
 
     async def start_timer(self, minutes, label=""):
+        self._timer_task = asyncio.current_task()
         total_seconds = int(minutes * 60)
         label = label or f"{minutes}分钟"
         print(f"[Timer] 启动: {label} ({total_seconds}s)")
         await self._broadcast_json({"type": "timer_start", "seconds": total_seconds, "label": label})
-        # 用墙钟计时, 独立于设备状态(对话/聆听/播报时照常倒计时)
-        deadline = time.monotonic() + total_seconds
-        while time.monotonic() < deadline:
-            await asyncio.sleep(0.5)
-        # 时间到: 用台灯扬声器播放闹铃
-        print(f"[Timer] 时间到: {label}")
-        await self._broadcast_json({"type": "timer_done", "label": label})
-        await self._play_alarm_sound()
+        try:
+            deadline = time.monotonic() + total_seconds
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.5)
+            print(f"[Timer] 时间到: {label}")
+            await self._broadcast_json({"type": "timer_done", "label": label})
+            await self._play_alarm_sound()
+        except asyncio.CancelledError:
+            print(f"[Timer] 已取消: {label}")
+            await self._broadcast_json({"type": "timer_cancelled", "label": label})
+        finally:
+            self._timer_task = None
 
     # ========== 广播 ==========
     async def _broadcast_json(self, data):

@@ -164,12 +164,14 @@ class AudioCodec:
 
     async def _load_device_config(self):
         """
-        加载或初始化设备配置.
+        加载或初始化设备配置. 按名称匹配设备, 避免 Windows 设备 ID 偏移问题.
         """
         audio_config = self.config.get_config("AUDIO_DEVICES", {}) or {}
 
         input_device_id = audio_config.get("input_device_id")
         output_device_id = audio_config.get("output_device_id")
+        input_device_name = audio_config.get("input_device_name")
+        output_device_name = audio_config.get("output_device_name")
 
         # 首次运行：自动选择设备
         if input_device_id is None or output_device_id is None:
@@ -177,9 +179,21 @@ class AudioCodec:
             await self._auto_detect_devices()
             return
 
-        # 从配置加载
-        self.mic_device_id = input_device_id
-        self.speaker_device_id = output_device_id
+        # 验证已保存的设备 ID 是否仍然有效 (按名称 + 能力匹配)
+        valid_input_id = self._validate_device(
+            input_device_id, input_device_name, require_input=True
+        )
+        valid_output_id = self._validate_device(
+            output_device_id, output_device_name, require_output=True
+        )
+
+        if valid_input_id is None or valid_output_id is None:
+            logger.warning("已保存的设备 ID 失效, 重新自动检测 (可能设备已变更)")
+            await self._auto_detect_devices()
+            return
+
+        self.mic_device_id = valid_input_id
+        self.speaker_device_id = valid_output_id
         self.device_input_sample_rate = audio_config.get(
             "input_sample_rate", AudioConfig.INPUT_SAMPLE_RATE
         )
@@ -189,7 +203,6 @@ class AudioCodec:
         self.input_channels = audio_config.get("input_channels", 1)
         self.output_channels = audio_config.get("output_channels", 1)
 
-        # 计算设备帧大小
         self._device_input_frame_size = int(
             self.device_input_sample_rate * (AudioConfig.FRAME_DURATION / 1000)
         )
@@ -198,9 +211,50 @@ class AudioCodec:
         )
 
         logger.info(
-            f"加载设备配置 | 输入: {self.device_input_sample_rate}Hz {self.input_channels}ch | "
-            f"输出: {self.device_output_sample_rate}Hz {self.output_channels}ch"
+            f"加载设备配置 | 输入: {self.device_input_sample_rate}Hz {self.input_channels}ch "
+            f"(#{self.mic_device_id}) | "
+            f"输出: {self.device_output_sample_rate}Hz {self.output_channels}ch "
+            f"(#{self.speaker_device_id})"
         )
+
+    def _validate_device(self, device_id, expected_name, require_input=False, require_output=False):
+        if device_id is None or expected_name is None:
+            return None
+
+        try:
+            devices = sd.query_devices()
+            if device_id >= len(devices):
+                return self._find_device_by_name(expected_name, require_input, require_output)
+
+            d = devices[device_id]
+            actual_name = d.get("name", "")
+            if actual_name == expected_name:
+                if require_input and d.get("max_input_channels", 0) == 0:
+                    return self._find_device_by_name(expected_name, require_input, require_output)
+                if require_output and d.get("max_output_channels", 0) == 0:
+                    return self._find_device_by_name(expected_name, require_input, require_output)
+                return device_id
+
+            return self._find_device_by_name(expected_name, require_input, require_output)
+        except Exception:
+            return None
+
+    def _find_device_by_name(self, name, require_input=False, require_output=False):
+        if not name:
+            return None
+        try:
+            devices = sd.query_devices()
+            for idx, d in enumerate(devices):
+                if d.get("name", "") == name:
+                    if require_input and d.get("max_input_channels", 0) == 0:
+                        continue
+                    if require_output and d.get("max_output_channels", 0) == 0:
+                        continue
+                    logger.info(f"按名称匹配设备: {name} → #{idx}")
+                    return idx
+        except Exception:
+            pass
+        return None
 
     async def _auto_detect_devices(self):
         """
