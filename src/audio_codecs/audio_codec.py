@@ -103,6 +103,7 @@ class AudioCodec:
         # 回调和监听器（解耦外部依赖）
         self._encoded_callback: Optional[Callable] = None
         self._audio_listeners: List[AudioListener] = []
+        self._pre_aec_listeners: List[AudioListener] = []  # AEC前的原始音频监听器(KWS用)
 
         # 音频处理器（可选注入）
         self.audio_processor = audio_processor
@@ -532,6 +533,13 @@ class AudioCodec:
             # 步骤4: 转换为 int16 供 Opus 编码和 AEC 处理
             audio_data_int16 = (audio_data * 32768.0).astype(np.int16)
 
+            # 步骤4.5: 通知 pre-AEC 监听器(KWS等需要原始信号的监听器, 不经AEC衰减)
+            for listener in self._pre_aec_listeners:
+                try:
+                    listener.on_audio_data(audio_data_int16.copy())
+                except Exception:
+                    pass
+
             # 步骤5: AEC处理（优先使用 SpeexDSP，回退到旧 AECProcessor）
             if self._aec_enabled and self._speex_aec is not None:
                 try:
@@ -756,6 +764,12 @@ class AudioCodec:
             self._audio_listeners.append(listener)
             logger.info(f"已添加音频监听器: {listener.__class__.__name__}")
 
+    def add_pre_aec_listener(self, listener: AudioListener):
+        """添加 pre-AEC 监听器, 在 AEC 处理之前获取原始音频(供 KWS 使用)"""
+        if listener not in self._pre_aec_listeners:
+            self._pre_aec_listeners.append(listener)
+            logger.info(f"已添加pre-AEC监听器: {listener.__class__.__name__}")
+
     def remove_audio_listener(self, listener: AudioListener):
         """移除音频监听器.
 
@@ -765,6 +779,12 @@ class AudioCodec:
         if listener in self._audio_listeners:
             self._audio_listeners.remove(listener)
             logger.info(f"已移除音频监听器: {listener.__class__.__name__}")
+
+    def remove_pre_aec_listener(self, listener: AudioListener):
+        """移除 pre-AEC 监听器"""
+        if listener in self._pre_aec_listeners:
+            self._pre_aec_listeners.remove(listener)
+            logger.info(f"已移除pre-AEC监听器: {listener.__class__.__name__}")
 
     async def write_audio(self, opus_data: bytes):
         """解码并播放音频（服务端 Opus 数据 → 扬声器）

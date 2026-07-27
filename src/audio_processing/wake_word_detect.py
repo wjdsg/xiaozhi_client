@@ -179,8 +179,8 @@ class WakeWordDetector:
             # 创建检测流
             self.stream = self.keyword_spotter.create_stream()
 
-            # 注册为音频监听器（观察者模式）
-            self.audio_codec.add_audio_listener(self)
+            # 注册为 pre-AEC 监听器, 拿到AEC前的原始音频, 避免信号衰减
+            self.audio_codec.add_pre_aec_listener(self)
 
             # 启动检测任务
             self.detection_task = asyncio.create_task(self._detection_loop())
@@ -255,6 +255,12 @@ class WakeWordDetector:
             else:
                 samples = audio_data.astype(np.float32)
 
+            # 自适应RMS归一化: 把低音量拉到KWS模型训练时的典型电平, 避免大喊才能唤醒
+            rms = float(np.sqrt(np.mean(samples ** 2)))
+            if rms > 0.0001:
+                gain = 0.08 / rms
+                samples = np.clip(samples * gain, -1.0, 1.0)
+
             # 将同步的CPU密集推理(accept+decode)丢到线程池执行,
             # 避免阻塞asyncio事件循环(否则会拖慢同一循环上的WebSocket收发/TTS入队)
             loop = asyncio.get_event_loop()
@@ -308,9 +314,9 @@ class WakeWordDetector:
         """
         self.is_running_flag = False
 
-        # 从AudioCodec移除监听器
+        # 从AudioCodec移除pre-AEC监听器
         if self.audio_codec:
-            self.audio_codec.remove_audio_listener(self)
+            self.audio_codec.remove_pre_aec_listener(self)
 
         if self.detection_task:
             self.detection_task.cancel()
