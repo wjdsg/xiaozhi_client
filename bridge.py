@@ -156,13 +156,15 @@ class WebBridge:
         self._current_opus_buf = []     # 当前句子的Opus帧
         self._current_tts_text = ""
         self._timer_task: asyncio.Task | None = None  # 当前闹钟任务
+        self._light_level: int = 0  # 灯泡档位: 0关 1弱 2中等 3全亮
         self._companion_task = None
         self._voice_start_time = 0.0
         self._wake_detect_time = 0.0
         self._last_send_time = 0.0
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
         self._pre_listen_opus = deque(maxlen=50)  # 打断前缓存的 Opus 帧(约1秒)
-        self._log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log")
+        self._log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge.log")
+        self._last_xiaozhi_attempt = 0.0  # xiaozhi重连冷却时间戳
 
     def _log(self, msg):
         t = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -285,6 +287,7 @@ class WebBridge:
             await asyncio.sleep(0.2)
 
         self._keep_listening = True
+        await self._play_wake_response()
         await self.xiaozhi.send_text(json.dumps(
             {"type": "listen", "state": "start", "mode": "auto"}))
         await self._set_state(DeviceState.LISTENING)
@@ -367,17 +370,22 @@ class WebBridge:
         if self.xiaozhi and self.xiaozhi.connected:
             await ws.send_json({"type": "state", "state": "idle"})
         elif self.xiaozhi and not self.xiaozhi.connected:
-            # 自动尝试重连
-            print("[Bridge] xiaozhi已断连, 自动重连...")
-            self._stop_companion()
-            ok = await self.connect_xiaozhi()
-            if ok:
-                await ws.send_json({"type": "state", "state": "idle"})
+            now = time.time()
+            if now - self._last_xiaozhi_attempt < 6:
+                await ws.send_json({"type": "state", "state": "connecting"})
             else:
-                await ws.send_json({"type": "state", "state": "disconnected"})
+                self._last_xiaozhi_attempt = now
+                print("[Bridge] xiaozhi已断连, 自动重连...")
+                self._stop_companion()
+                ok = await self.connect_xiaozhi()
+                if ok:
+                    await ws.send_json({"type": "state", "state": "idle"})
+                else:
+                    await ws.send_json({"type": "state", "state": "disconnected"})
         else:
             await ws.send_json({"type": "state", "state": "connecting"})
         await ws.send_json({"type": "wake_word", "enabled": self._wake_word_enabled})
+        await ws.send_json({"type": "light_state", "level": self._light_level})
 
         try:
             async for msg in ws:
@@ -491,6 +499,8 @@ class WebBridge:
                 # 兜底：LLM 没走 function_call 时, 从 TTS 文本解析闹钟命令
                 if text:
                     self._try_parse_timer_from_text(text)
+                    self._try_parse_cancel_from_text(text)
+                    self._try_parse_light_from_text(text)
                 asyncio.create_task(self._set_state(DeviceState.SPEAKING))  # 切到SPEAKING, 唤醒词仍活跃可打断
                 asyncio.create_task(self._broadcast_json(
                     {"type": "state", "state": "speaking"}))
@@ -586,6 +596,39 @@ class WebBridge:
                 "properties": {},
                 "required": [],
             },
+        },
+        {
+            "name": "light_toggle",
+            "description": (
+                "切换台灯灯泡的开关状态。关灯时打开(全亮),开灯时关闭。"
+                "当用户说'开灯'、'关灯'、'把灯打开'、'把灯关掉'、"
+                "'灯亮一点'、'灯暗一点'时使用。"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+        {
+            "name": "set_brightness",
+            "description": (
+                "设置台灯灯泡的亮度档位。0=关, 1=弱光, 2=中等, 3=全亮。"
+                "当用户说'灯光调到中等'、'灯泡暗一点'、'调到最亮'、"
+                "'亮度设为弱'、'把灯调到最大'时使用。"
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "level": {
+                        "type": "integer",
+                        "description": "亮度档位: 0关/1弱/2中等/3全亮",
+                        "minimum": 0,
+                        "maximum": 3,
+                    },
+                },
+                "required": ["level"],
+            },
         }]
         await self._mcp_reply(msg_id, {"tools": tools})
 
@@ -619,6 +662,28 @@ class WebBridge:
             await self._mcp_reply(msg_id, {
                 "content": [{"type": "text", "text": result_text}],
             })
+            await self._broadcast_json({"type": "timer_cancelled"})
+        elif name == "light_toggle":
+            if self._light_level == 0:
+                self._light_level = 3
+                result_text = "灯已打开，全亮"
+            else:
+                self._light_level = 0
+                result_text = "灯已关闭"
+            await self._mcp_reply(msg_id, {
+                "content": [{"type": "text", "text": result_text}],
+            })
+            await self._broadcast_json({"type": "light_state", "level": self._light_level})
+        elif name == "set_brightness":
+            level = int(args.get("level", 3))
+            level = max(0, min(3, level))
+            self._light_level = level
+            labels = {0: "灯已关闭", 1: "灯光已调到弱光", 2: "灯光已调到中等", 3: "灯光已调到全亮"}
+            result_text = labels.get(level, f"亮度已设为{level}")
+            await self._mcp_reply(msg_id, {
+                "content": [{"type": "text", "text": result_text}],
+            })
+            await self._broadcast_json({"type": "light_state", "level": self._light_level})
         else:
             await self._mcp_reply(msg_id, error_msg=f"未知工具: {name}")
 
@@ -633,6 +698,76 @@ class WebBridge:
             args = args_str
         print(f"[Bridge] FunctionCall: name={name}, args={json.dumps(args, ensure_ascii=False)}")
         self._try_start_timer(name, args)
+        self._try_cancel_timer(name, args)
+        self._try_light_command(name, args)
+
+    def _try_light_command(self, name, args):
+        """识别灯泡控制意图"""
+        light_keywords = ("light_toggle", "light_control", "set_brightness",
+                          "light", "灯光", "灯泡", "开灯", "关灯", "亮度")
+        cn_low = ("弱", "暗", "低", "小", "暗一点", "小一点")
+        cn_mid = ("中等", "中", "适中", "中档", "中等亮度")
+        cn_high = ("全亮", "强", "高", "亮", "大", "最亮", "最高", "最大", "开", "打开", "亮一点", "亮一些")
+        cn_off = ("关", "关闭", "关掉")
+
+        if not name or not any(kw in str(name).lower() for kw in light_keywords):
+            return
+
+        # 尝试从 args 获取 level
+        level = args.get("level")
+        if level is not None:
+            self._light_level = max(0, min(3, int(level)))
+            print(f"[Bridge] 意图识别灯光: level={self._light_level}")
+            asyncio.create_task(self._broadcast_json({"type": "light_state", "level": self._light_level}))
+            return
+
+        # 从 name 或 label/action 等字段解析
+        text = str(name).lower()
+        extra = str(args.get("label", "") or args.get("action", "") or args.get("state", ""))
+        combined = text + extra
+
+        if any(kw in combined for kw in cn_off):
+            self._light_level = 0
+        elif any(kw in combined for kw in cn_low):
+            self._light_level = 1
+        elif any(kw in combined for kw in cn_mid):
+            self._light_level = 2
+        elif any(kw in combined for kw in cn_high):
+            self._light_level = 3
+        else:
+            # 无法判断: toggle
+            self._light_level = 0 if self._light_level > 0 else 3
+
+        print(f"[Bridge] 意图识别灯光: level={self._light_level}")
+        asyncio.create_task(self._broadcast_json({"type": "light_state", "level": self._light_level}))
+
+    def _try_parse_light_from_text(self, text):
+        """从 LLM 文本回复中解析灯光命令"""
+        import re
+        cn_low = ("弱", "暗", "低", "小")
+        cn_mid = ("中等", "中", "适中")
+        cn_high = ("全亮", "最亮", "最高", "最大")
+        cn_off = ("关", "关闭", "关掉")
+        cn_on = ("开", "打开", "打开灯")
+
+        original_level = self._light_level
+
+        if any(phrase in text for phrase in cn_off):
+            self._light_level = 0
+        elif any(phrase in text for phrase in cn_low):
+            self._light_level = 1
+        elif any(phrase in text for phrase in cn_mid):
+            self._light_level = 2
+        elif any(phrase in text for phrase in cn_high):
+            self._light_level = 3
+        elif any(phrase in text for phrase in cn_on):
+            self._light_level = 3
+        else:
+            return
+
+        if self._light_level != original_level:
+            print(f"[Bridge] 文本识别灯光: level={self._light_level} (原文: {text[:50]})")
+            asyncio.create_task(self._broadcast_json({"type": "light_state", "level": self._light_level}))
 
     def _try_start_timer(self, name, args):
         """识别闹钟相关意图并启动计时"""
@@ -649,6 +784,29 @@ class WebBridge:
         label = args.get("label", "") or args.get("name", "") or f"{int(minutes)}分钟"
         print(f"[Bridge] 意图识别闹钟: {label}")
         asyncio.create_task(self.start_timer(minutes, label))
+
+    def _try_cancel_timer(self, name, args):
+        """识别取消闹钟意图 (function_call 兜底)"""
+        cancel_keywords = ("cancel_timer", "stop_timer", "cancel",
+                           "取消", "关闭", "关掉", "停", "不用")
+        if not name or not any(kw in str(name).lower() for kw in cancel_keywords):
+            return
+        cn_timer = ("闹钟", "计时", "定时", "提醒", "alarm", "timer")
+        combined = str(name).lower() + str(args.get("label", "") or args.get("name", ""))
+        if any(kw in combined for kw in cn_timer) or "cancel_timer" in str(name).lower():
+            self._do_cancel_timer()
+        elif any(kw in combined for kw in ("取消", "关闭", "关掉", "停", "不用")) and any(kw in combined for kw in ("闹钟", "计时", "提醒", "alarm", "timer")):
+            self._do_cancel_timer()
+
+    def _do_cancel_timer(self):
+        """实际执行取消闹钟"""
+        if self._timer_task and not self._timer_task.done():
+            self._timer_task.cancel()
+            self._timer_task = None
+            print("[Bridge] 意图识别取消闹钟 ✓")
+            asyncio.create_task(self._broadcast_json({"type": "timer_cancelled"}))
+        else:
+            print("[Bridge] 意图识别取消闹钟: 当前无运行中的闹钟")
 
     def _parse_cn_number(self, s):
         cn = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
@@ -679,6 +837,13 @@ class WebBridge:
                     print(f"[Bridge] 文本识别闹钟: {minutes}分钟 (原文: {text[:50]})")
                     asyncio.create_task(self.start_timer(minutes))
                     return
+
+    def _try_parse_cancel_from_text(self, text):
+        """从 LLM 文本回复中解析取消闹钟命令"""
+        cn_cancel = ("取消闹钟", "关闭闹钟", "关掉闹钟", "把闹钟关", "不用提醒", "不用闹钟",
+                     "停掉闹钟", "停止闹钟", "不要闹钟", "取消计时", "关闭计时")
+        if any(phrase in text for phrase in cn_cancel):
+            self._do_cancel_timer()
 
     async def _on_xiaozhi_audio(self, opus_data):
         """xiaozhi返回TTS音频 → 扬声器播放"""
@@ -817,6 +982,39 @@ class WebBridge:
         await self._broadcast_json({"type": "state", "state": "idle"})
 
     # ========== 闹钟记时 ==========
+    async def _play_wake_response(self):
+        """播放唤醒应答音(nihaowozai.mp3), 期间不收声"""
+        mp3_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nihaowozai.mp3")
+        if not self.codec or not os.path.exists(mp3_path):
+            print("[Wake] 应答音文件缺失或音频未就绪")
+            return
+        sample_rate = AudioConfig.OUTPUT_SAMPLE_RATE
+        frame_size = AudioConfig.OUTPUT_FRAME_SIZE
+        cmd = [
+            "ffmpeg", "-nostdin", "-loglevel", "quiet",
+            "-i", mp3_path,
+            "-f", "s16le", "-acodec", "pcm_s16le",
+            "-ac", "1", "-ar", str(sample_rate), "pipe:1",
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            pcm_bytes, _ = await proc.communicate()
+        except FileNotFoundError:
+            print("[Wake] 未找到ffmpeg, 跳过应答音")
+            return
+        except Exception as e:
+            print(f"[Wake] 解码失败: {e}")
+            return
+        if not pcm_bytes:
+            print("[Wake] 解码结果为空")
+            return
+        samples = np.frombuffer(pcm_bytes, dtype=np.int16)
+        print(f"[Wake] 播放应答音: {len(samples)}样本 @ {sample_rate}Hz")
+        for i in range(0, len(samples), frame_size):
+            frame = samples[i:i + frame_size]
+            await self.codec.write_pcm_direct(frame.copy())
+
     async def _play_alarm_sound(self):
         """用台灯扬声器播放闹铃mp3 (FFmpeg解码为目标采样率PCM → codec直推)"""
         mp3_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clock-alarm-1.mp3")
