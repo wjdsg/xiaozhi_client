@@ -597,21 +597,17 @@ class WebBridge:
     async def _mcp_tools_list(self, msg_id):
         tools = [{
             "name": "set_timer",
-            "description": (
-                "设置一个倒计时闹钟,到时间后台灯扬声器会播放闹铃声提醒用户。"
-                "当用户想让台灯帮ta定时提醒时使用,例如'帮我设5分钟闹钟'、'倒计时10分钟'、"
-                "'提醒我15分钟后休息'、'定一个25分钟的番茄钟'等。"
-            ),
+            "description": "设置倒计时闹钟,到时间后提醒。参数minutes为分钟数。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "minutes": {
                         "type": "number",
-                        "description": "倒计时的分钟数,必须是正整数,如5表示5分钟",
+                        "description": "分钟数",
                     },
                     "label": {
                         "type": "string",
-                        "description": "闹钟标签,可选,如'休息时间到'",
+                        "description": "标签,可选",
                     },
                 },
                 "required": ["minutes"],
@@ -619,10 +615,7 @@ class WebBridge:
         },
         {
             "name": "cancel_timer",
-            "description": (
-                "取消当前正在运行的倒计时闹钟。"
-                "当用户说'关闭闹钟'、'取消闹钟'、'不用提醒了'、'把闹钟关掉'时使用。"
-            ),
+            "description": "取消当前运行的倒计时闹钟。",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -631,11 +624,7 @@ class WebBridge:
         },
         {
             "name": "light_toggle",
-            "description": (
-                "切换台灯灯泡的开关状态。关灯时打开(全亮),开灯时关闭。"
-                "当用户说'开灯'、'关灯'、'把灯打开'、'把灯关掉'、"
-                "'灯亮一点'、'灯暗一点'时使用。"
-            ),
+            "description": "切换台灯开关。",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -644,17 +633,13 @@ class WebBridge:
         },
         {
             "name": "set_brightness",
-            "description": (
-                "设置台灯灯泡的亮度档位。0=关, 1=弱光, 2=中等, 3=全亮。"
-                "当用户说'灯光调到中等'、'灯泡暗一点'、'调到最亮'、"
-                "'亮度设为弱'、'把灯调到最大'时使用。"
-            ),
+            "description": "设置台灯亮度档位。0=关,1=弱,2=中,3=亮。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "level": {
                         "type": "integer",
-                        "description": "亮度档位: 0关/1弱/2中等/3全亮",
+                        "description": "亮度: 0关 1弱 2中 3亮",
                         "minimum": 0,
                         "maximum": 3,
                     },
