@@ -161,6 +161,8 @@ class WebBridge:
         self._voice_start_time = 0.0
         self._wake_detect_time = 0.0
         self._wake_response_pcm = None  # 预缓存唤醒应答音PCM
+        self._feedback_pcm = None      # 反馈提示音(100ms sine chirp)
+        self._feedback_triggered = False  # 每轮对话只触发一次反馈
         self._last_send_time = 0.0
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
         self._pre_listen_opus = deque(maxlen=50)  # 打断前缓存的 Opus 帧(约1秒)
@@ -197,13 +199,25 @@ class WebBridge:
         self.codec = AudioCodec()
         await self.codec.initialize()
         self.codec.set_encoded_callback(self._on_mic_opus)
-        # VAD: 追踪首音时间用于延迟统计
+        # VAD: 追踪首音时间用于延迟统计 + 静音检测触发即时反馈
         class _VAD:
+            def __init__(self, bridge):
+                self.bridge = bridge
+                self._silence_frames = 0
+                self._silence_threshold = 15  # 15帧×20ms=300ms
             def on_audio_data(self, audio_data):
                 if int(np.max(np.abs(audio_data))) > VAD_THRESHOLD:
                     self.bridge._voice_start_time = time.time()
-        vad = _VAD()
-        vad.bridge = self
+                    self._silence_frames = 0
+                    self.bridge._feedback_triggered = False
+                elif (self.bridge._device_state == DeviceState.LISTENING
+                      and not self.bridge._feedback_triggered):
+                    self._silence_frames += 1
+                    if self._silence_frames >= self._silence_threshold:
+                        self.bridge._feedback_triggered = True
+                        self.bridge._main_loop.call_soon_threadsafe(
+                            lambda: asyncio.ensure_future(self.bridge._on_speech_end()))
+        vad = _VAD(self)
         self.codec.add_audio_listener(vad)
         # 端侧能量检测器：用于 TTS 播放时的语音打断
         cfg = ConfigManager.get_instance()
@@ -294,6 +308,14 @@ class WebBridge:
             {"type": "listen", "state": "start", "mode": "auto"}))
         await self._set_state(DeviceState.LISTENING)
         await self._broadcast_json({"type": "state", "state": "listening"})
+
+    async def _on_speech_end(self):
+        """用户说完话后300ms静音触发: 播放反馈提示音 + 浏览器显示思考中"""
+        if not self._feedback_triggered:
+            return
+        if self._feedback_pcm is not None and self.codec:
+            await self.codec.write_pcm_direct(self._feedback_pcm.copy())
+        await self._broadcast_json({"type": "state", "state": "thinking"})
 
     def _trigger_energy_interrupt(self):
         """音频线程回调 -> 调度到主事件循环执行打断逻辑"""
@@ -894,6 +916,7 @@ class WebBridge:
         elif state == DeviceState.LISTENING:
             self._cancel_idle_timer()
             self._pre_listen_opus.clear()
+            self._feedback_triggered = False
             if self._wake_word_detector:
                 self._wake_word_detector.paused = True
             if self._energy_detector:
@@ -984,8 +1007,20 @@ class WebBridge:
         await self._broadcast_json({"type": "state", "state": "idle"})
 
     # ========== 闹钟记时 ==========
+    def _generate_feedback_sound(self):
+        """纯numpy生成100ms上升音调(800→1200Hz), 零I/O零文件"""
+        sr = AudioConfig.OUTPUT_SAMPLE_RATE
+        duration = 0.1
+        t = np.linspace(0, duration, int(sr * duration), endpoint=False)
+        freq = np.linspace(800, 1200, len(t))
+        envelope = np.sin(np.pi * t / duration)  # 淡入淡出
+        samples = (np.sin(2 * np.pi * freq * t) * envelope * 0.25 * 32767).astype(np.int16)
+        return samples
+
     async def _preload_wake_response(self):
         """启动阶段预解码唤醒应答音, 后续唤醒直接使用缓存避免FFmpeg进程开销"""
+        self._feedback_pcm = self._generate_feedback_sound()
+        print(f"[Bridge] 反馈音效已就绪: {len(self._feedback_pcm)}样本")
         mp3_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nihaowozai.mp3")
         if not os.path.exists(mp3_path):
             print("[Wake] 应答音文件缺失, 跳过预加载")
