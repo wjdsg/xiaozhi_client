@@ -102,8 +102,8 @@ class XiaozhiClient:
                     data = json.loads(msg)
                     t = data.get("type", "?")
                     if t in ("stt", "tts", "llm"):
-                        safe = json.dumps(data, ensure_ascii=False)[:200]
-                        print(f"[Xiaozhi] ← {t}: {safe}")
+                        snippet = str(data.get("text", data.get("state", "")))[:40]
+                        print(f"[Xiaozhi] ← {t}: {snippet}")
                     if self.on_json:
                         self.on_json(data)
                 elif isinstance(msg, bytes):
@@ -160,6 +160,7 @@ class WebBridge:
         self._companion_task = None
         self._voice_start_time = 0.0
         self._wake_detect_time = 0.0
+        self._wake_response_pcm = None  # 预缓存唤醒应答音PCM
         self._last_send_time = 0.0
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
         self._pre_listen_opus = deque(maxlen=50)  # 打断前缓存的 Opus 帧(约1秒)
@@ -215,6 +216,7 @@ class WebBridge:
         self._energy_detector.set_interrupt_callback(self._trigger_energy_interrupt)
         self.codec.add_audio_listener(self._energy_detector)
         print("[Bridge] 音频设备就绪 ✓")
+        await self._preload_wake_response()
 
     async def start_wake_word(self):
         """初始化并启动唤醒词检测"""
@@ -284,7 +286,7 @@ class WebBridge:
             await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
             if self.codec:
                 await self.codec.clear_audio_queue()
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.05)
 
         self._keep_listening = True
         await self._play_wake_response()
@@ -864,7 +866,7 @@ class WebBridge:
             asyncio.create_task(self._try_reconnect())
 
     async def _auto_restart(self):
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.3)
         if self._keep_listening and self.xiaozhi and self.xiaozhi.connected:
             await self.codec.clear_audio_queue()
             await self.xiaozhi.send_text(json.dumps(
@@ -982,14 +984,47 @@ class WebBridge:
         await self._broadcast_json({"type": "state", "state": "idle"})
 
     # ========== 闹钟记时 ==========
+    async def _preload_wake_response(self):
+        """启动阶段预解码唤醒应答音, 后续唤醒直接使用缓存避免FFmpeg进程开销"""
+        mp3_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nihaowozai.mp3")
+        if not os.path.exists(mp3_path):
+            print("[Wake] 应答音文件缺失, 跳过预加载")
+            return
+        sample_rate = AudioConfig.OUTPUT_SAMPLE_RATE
+        cmd = [
+            "ffmpeg", "-nostdin", "-loglevel", "quiet",
+            "-i", mp3_path,
+            "-f", "s16le", "-acodec", "pcm_s16le",
+            "-ac", "1", "-ar", str(sample_rate), "pipe:1",
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            pcm_bytes, _ = await proc.communicate()
+            if pcm_bytes:
+                self._wake_response_pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
+                print(f"[Wake] 应答音已预缓存: {len(self._wake_response_pcm)}样本")
+        except FileNotFoundError:
+            print("[Wake] 未找到ffmpeg, 跳过应答音预加载")
+        except Exception as e:
+            print(f"[Wake] 预加载失败: {e}")
+
     async def _play_wake_response(self):
-        """播放唤醒应答音(nihaowozai.mp3), 期间不收声"""
+        """播放唤醒应答音, 优先使用预缓存PCM"""
+        frame_size = AudioConfig.OUTPUT_FRAME_SIZE
+        if self._wake_response_pcm is not None:
+            samples = self._wake_response_pcm
+            for i in range(0, len(samples), frame_size):
+                frame = samples[i:i + frame_size]
+                await self.codec.write_pcm_direct(frame.copy())
+            return
+
+        # 回退: FFmpeg实时解码 (冷启动/缓存失效时)
         mp3_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nihaowozai.mp3")
         if not self.codec or not os.path.exists(mp3_path):
             print("[Wake] 应答音文件缺失或音频未就绪")
             return
         sample_rate = AudioConfig.OUTPUT_SAMPLE_RATE
-        frame_size = AudioConfig.OUTPUT_FRAME_SIZE
         cmd = [
             "ffmpeg", "-nostdin", "-loglevel", "quiet",
             "-i", mp3_path,
@@ -1010,7 +1045,7 @@ class WebBridge:
             print("[Wake] 解码结果为空")
             return
         samples = np.frombuffer(pcm_bytes, dtype=np.int16)
-        print(f"[Wake] 播放应答音: {len(samples)}样本 @ {sample_rate}Hz")
+        self._wake_response_pcm = samples
         for i in range(0, len(samples), frame_size):
             frame = samples[i:i + frame_size]
             await self.codec.write_pcm_direct(frame.copy())
