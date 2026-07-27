@@ -163,6 +163,8 @@ class WebBridge:
         self._wake_response_pcm = None  # 预缓存唤醒应答音PCM
         self._feedback_pcm = None      # 反馈提示音(100ms sine chirp)
         self._feedback_triggered = False  # 每轮对话只触发一次反馈
+        self._intent_responses = {}   # {key: numpy PCM} 意图响应预录音频
+        self._skip_tts = False        # 已用本地音频响应, 丢弃服务端TTS
         self._last_send_time = 0.0
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
         self._pre_listen_opus = deque(maxlen=50)  # 打断前缓存的 Opus 帧(约1秒)
@@ -506,6 +508,12 @@ class WebBridge:
             }))
         elif t == "tts":
             state = data.get("state", "")
+            if self._skip_tts:
+                if state == "stop":
+                    self._skip_tts = False
+                    if self._keep_listening:
+                        asyncio.create_task(self._auto_restart())
+                return
             text = data.get("text", "")
             if state == "start" and self._speech_start_time:
                 tts_latency = time.time() - self._speech_start_time
@@ -665,6 +673,7 @@ class WebBridge:
             except Exception:
                 args = {}
         print(f"[Bridge] MCP tools/call: {name}, args={json.dumps(args, ensure_ascii=False)}")
+        response_key = None
         if name == "set_timer":
             minutes = float(args.get("minutes", 0))
             label = args.get("label", "") or f"{int(minutes)}分钟"
@@ -673,6 +682,7 @@ class WebBridge:
                 return
             asyncio.create_task(self.start_timer(minutes, label))
             result_text = f"已设置{label}闹钟,{int(minutes)}分钟后提醒"
+            response_key = "timer_set"
             await self._mcp_reply(msg_id, {
                 "content": [{"type": "text", "text": result_text}],
             })
@@ -681,8 +691,10 @@ class WebBridge:
                 self._timer_task.cancel()
                 self._timer_task = None
                 result_text = "闹钟已取消"
+                response_key = "timer_cancel"
             else:
                 result_text = "当前没有正在运行的闹钟"
+                response_key = "timer_none"
             await self._mcp_reply(msg_id, {
                 "content": [{"type": "text", "text": result_text}],
             })
@@ -691,9 +703,11 @@ class WebBridge:
             if self._light_level == 0:
                 self._light_level = 3
                 result_text = "灯已打开，全亮"
+                response_key = "light_on"
             else:
                 self._light_level = 0
                 result_text = "灯已关闭"
+                response_key = "light_off"
             await self._mcp_reply(msg_id, {
                 "content": [{"type": "text", "text": result_text}],
             })
@@ -704,12 +718,17 @@ class WebBridge:
             self._light_level = level
             labels = {0: "灯已关闭", 1: "灯光已调到弱光", 2: "灯光已调到中等", 3: "灯光已调到全亮"}
             result_text = labels.get(level, f"亮度已设为{level}")
+            response_key = "brightness"
             await self._mcp_reply(msg_id, {
                 "content": [{"type": "text", "text": result_text}],
             })
             await self._broadcast_json({"type": "light_state", "level": self._light_level})
         else:
             await self._mcp_reply(msg_id, error_msg=f"未知工具: {name}")
+
+        if response_key:
+            await self._play_intent_response(response_key)
+            self._skip_tts = True
 
     def _handle_function_call(self, data):
         """处理OpenAI风格的function_call消息"""
@@ -871,6 +890,8 @@ class WebBridge:
 
     async def _on_xiaozhi_audio(self, opus_data):
         """xiaozhi返回TTS音频 → 扬声器播放"""
+        if self._skip_tts:
+            return
         if not self.codec:
             return
         try:
@@ -917,6 +938,7 @@ class WebBridge:
             self._cancel_idle_timer()
             self._pre_listen_opus.clear()
             self._feedback_triggered = False
+            self._skip_tts = False
             if self._wake_word_detector:
                 self._wake_word_detector.paused = True
             if self._energy_detector:
@@ -1017,10 +1039,51 @@ class WebBridge:
         samples = (np.sin(2 * np.pi * freq * t) * envelope * 0.25 * 32767).astype(np.int16)
         return samples
 
+    async def _preload_intent_responses(self):
+        """预解码所有意图响应MP3为PCM, MCP工具执行后即时播放跳过服务端TTS"""
+        base = os.path.dirname(os.path.abspath(__file__))
+        files = {
+            "timer_set":    "resp_timer_set.mp3",
+            "timer_cancel": "resp_timer_cancel.mp3",
+            "timer_none":   "resp_timer_none.mp3",
+            "light_on":     "resp_light_on.mp3",
+            "light_off":    "resp_light_off.mp3",
+            "brightness":   "resp_brightness.mp3",
+        }
+        sr = AudioConfig.OUTPUT_SAMPLE_RATE
+        for key, fname in files.items():
+            path = os.path.join(base, fname)
+            if not os.path.exists(path):
+                print(f"[Bridge] 意图响应文件缺失: {fname}")
+                continue
+            cmd = ["ffmpeg", "-nostdin", "-loglevel", "quiet",
+                   "-i", path, "-f", "s16le", "-acodec", "pcm_s16le",
+                   "-ac", "1", "-ar", str(sr), "pipe:1"]
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                pcm, _ = await proc.communicate()
+                if pcm:
+                    self._intent_responses[key] = np.frombuffer(pcm, dtype=np.int16)
+                    print(f"[Bridge] 意图响应已缓存: {key}")
+            except Exception as e:
+                print(f"[Bridge] 意图响应解码失败 {fname}: {e}")
+
+    async def _play_intent_response(self, key):
+        """播放预缓存的意图响应PCM音频"""
+        pcm = self._intent_responses.get(key)
+        if pcm is None or not self.codec:
+            return
+        frame_size = AudioConfig.OUTPUT_FRAME_SIZE
+        for i in range(0, len(pcm), frame_size):
+            frame = pcm[i:i + frame_size]
+            await self.codec.write_pcm_direct(frame.copy())
+
     async def _preload_wake_response(self):
         """启动阶段预解码唤醒应答音, 后续唤醒直接使用缓存避免FFmpeg进程开销"""
         self._feedback_pcm = self._generate_feedback_sound()
         print(f"[Bridge] 反馈音效已就绪: {len(self._feedback_pcm)}样本")
+        await self._preload_intent_responses()
         mp3_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nihaowozai.mp3")
         if not os.path.exists(mp3_path):
             print("[Wake] 应答音文件缺失, 跳过预加载")
