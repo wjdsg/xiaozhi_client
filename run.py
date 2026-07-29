@@ -50,8 +50,6 @@ async def main():
         print("> 唤醒词未启用, 需手动点击按钮")
 
     url = f"http://{CONFIG['local_host']}:{CONFIG['local_port']}"
-    print(f"> 打开浏览器: {url}")
-    webbrowser.open(url)
 
     print("> 连接xiaozhi服务...")
     try:
@@ -60,6 +58,9 @@ async def main():
             print("> ✓ 就绪, 点击浏览器按钮开始对话")
         else:
             print("> ✗ xiaozhi连接失败, 请检查网络")
+
+        print(f"> 打开浏览器: {url}")
+        webbrowser.open(url)
 
         print("> 按 Ctrl+C 退出...")
         try:

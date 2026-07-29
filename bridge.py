@@ -63,13 +63,13 @@ class XiaozhiClient:
                 self.ws = await websockets.connect(
                     self.url, ssl=ssl_ctx, additional_headers=self.headers,
                     ping_interval=20, ping_timeout=20, close_timeout=10,
-                    max_size=10 * 1024 * 1024,
+                    open_timeout=5, max_size=10 * 1024 * 1024,
                 )
             except TypeError:
                 self.ws = await websockets.connect(
                     self.url, ssl=ssl_ctx, extra_headers=self.headers,
                     ping_interval=20, ping_timeout=20, close_timeout=10,
-                    max_size=10 * 1024 * 1024,
+                    open_timeout=5, max_size=10 * 1024 * 1024,
                 )
 
             hello = {
@@ -94,7 +94,7 @@ class XiaozhiClient:
                     return True
             except asyncio.TimeoutError:
                 print("[Xiaozhi] hello响应超时")
-        except (asyncio.TimeoutError, OSError, ConnectionError) as e:
+        except Exception as e:
             print(f"[Xiaozhi] 连接失败: {e}")
             try:
                 if self.ws:
@@ -961,9 +961,8 @@ class WebBridge:
 
     async def _try_reconnect(self):
         for i in range(5):
-            await asyncio.sleep(3)
-            if self.xiaozhi and await self.xiaozhi.connect():
-                await self._broadcast_json({"type": "state", "state": "idle"})
+            await asyncio.sleep(min(3 * (i + 1), 15))  # 3/6/9/12/15s退避
+            if await self.connect_xiaozhi():
                 return
         await self._broadcast_json({"type": "error", "message": "服务连接失败, 请刷新"})
 
