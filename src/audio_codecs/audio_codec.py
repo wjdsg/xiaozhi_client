@@ -951,10 +951,6 @@ class AudioCodec:
         if cleared_count > 0:
             logger.info(f"清空音频队列，丢弃 {cleared_count} 帧音频数据")
 
-        if cleared_count > 100:
-            gc.collect()
-            logger.debug("执行垃圾回收以释放内存")
-
     # ============= AEC 控制方法 =============
 
     async def _cleanup_resampler(self, resampler, name: str):

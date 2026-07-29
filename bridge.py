@@ -115,6 +115,7 @@ class XiaozhiClient:
                         print(f"[Xiaozhi] ← {t}: {snippet}")
                     if self.on_json:
                         self.on_json(data)
+                    await asyncio.sleep(0)  # yield让字幕broadcast task先执行
                 elif isinstance(msg, bytes):
                     if self.on_audio:
                         await self.on_audio(msg)  # 内联解码, 不创建任务
@@ -187,17 +188,29 @@ class WebBridge:
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
         self._pre_listen_opus = deque(maxlen=50)  # 打断前缓存的 Opus 帧(约1秒)
         self._log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge.log")
+        self._log_queue = asyncio.Queue()
+        self._log_task: asyncio.Task | None = None
         self._last_xiaozhi_attempt = 0.0  # xiaozhi重连冷却时间戳
 
     def _log(self, msg):
         t = time.strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{t}] {msg}\n"
         try:
-            with open(self._log_path, "a", encoding="utf-8") as f:
-                f.write(line)
-                f.flush()
-        except Exception as e:
-            print(f"[Bridge] 日志写入失败: {e}")
+            self._log_queue.put_nowait(line)
+        except asyncio.QueueFull:
+            pass
+
+    async def _log_writer(self):
+        while True:
+            try:
+                line = await asyncio.wait_for(self._log_queue.get(), timeout=5.0)
+                with open(self._log_path, "a", encoding="utf-8") as f:
+                    f.write(line)
+                    f.flush()
+            except asyncio.TimeoutError:
+                continue
+            except Exception:
+                pass
 
     def _setup_routes(self):
         self.app.router.add_get("/", self._handle_index)
@@ -209,6 +222,7 @@ class WebBridge:
         await runner.setup()
         site = web.TCPSite(runner, self.config["local_host"], self.config["local_port"])
         await site.start()
+        self._log_task = asyncio.create_task(self._log_writer())
         print(f"[Bridge] HTTP服务: http://{self.config['local_host']}:{self.config['local_port']}")
         self._log("服务启动")
 
@@ -392,6 +406,8 @@ class WebBridge:
         self._shutdown_event.set()
         self._cancel_idle_timer()
         self._save_tts_cache()  # 关闭时落盘
+        if self._log_task:
+            self._log_task.cancel()
         if self._wake_word_detector:
             await self._wake_word_detector.stop()
         if self.xiaozhi:

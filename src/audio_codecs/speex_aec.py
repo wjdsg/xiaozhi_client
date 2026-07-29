@@ -113,13 +113,19 @@ class SpeexAEC:
         with self._lock:
             if self._reference_buffer is None or len(ref_16khz) == 0:
                 return
-            n = len(ref_16khz)
+            samples = ref_16khz.astype(np.int16)
+            n = len(samples)
             buf = self._reference_buffer
             buf_size = len(buf)
-            for sample in ref_16khz.astype(np.int16):
-                buf[self._ref_write_idx % buf_size] = sample
-                self._ref_write_idx += 1
-                self._prefill_count += 1
+            idx = self._ref_write_idx % buf_size
+            remaining = buf_size - idx
+            if n <= remaining:
+                buf[idx:idx + n] = samples
+            else:
+                buf[idx:] = samples[:remaining]
+                buf[:n - remaining] = samples[remaining:]
+            self._ref_write_idx += n
+            self._prefill_count += n
             if self._prefill_count >= self.frame_delay * self.frame_size:
                 self._ref_ready = True
 
@@ -133,9 +139,8 @@ class SpeexAEC:
             read_start = self._ref_write_idx - (
                 self.frame_delay * self.frame_size + self.frame_size
             )
-            ref_frame = np.empty(self.frame_size, dtype=np.int16)
-            for i in range(self.frame_size):
-                ref_frame[i] = self._reference_buffer[(read_start + i) % buf_size]
+            indices = np.arange(read_start, read_start + self.frame_size) % buf_size
+            ref_frame = self._reference_buffer[indices]
 
         mic = mic_16khz.astype(np.int16)
         out = np.zeros(self.frame_size, dtype=np.int16)
