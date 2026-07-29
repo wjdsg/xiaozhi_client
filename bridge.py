@@ -760,6 +760,7 @@ class WebBridge:
                     "type": "tts", "state": "sentence_start", "text": subtitle,
                 }))
             await self._broadcast_json({"type": "state", "state": "speaking"})
+            await self._set_state(DeviceState.SPEAKING)
             await self._play_intent_response(response_key)
             if self._keep_listening:
                 asyncio.create_task(self._auto_restart())
