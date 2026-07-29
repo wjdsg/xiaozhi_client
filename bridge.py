@@ -59,40 +59,49 @@ class XiaozhiClient:
         import ssl
         ssl_ctx = ssl._create_unverified_context() if self.url.startswith("wss://") else None
         try:
-            self.ws = await websockets.connect(
-                self.url, ssl=ssl_ctx, additional_headers=self.headers,
-                ping_interval=20, ping_timeout=20, close_timeout=10,
-                max_size=10 * 1024 * 1024,
-            )
-        except TypeError:
-            self.ws = await websockets.connect(
-                self.url, ssl=ssl_ctx, extra_headers=self.headers,
-                ping_interval=20, ping_timeout=20, close_timeout=10,
-                max_size=10 * 1024 * 1024,
-            )
+            try:
+                self.ws = await websockets.connect(
+                    self.url, ssl=ssl_ctx, additional_headers=self.headers,
+                    ping_interval=20, ping_timeout=20, close_timeout=10,
+                    max_size=10 * 1024 * 1024,
+                )
+            except TypeError:
+                self.ws = await websockets.connect(
+                    self.url, ssl=ssl_ctx, extra_headers=self.headers,
+                    ping_interval=20, ping_timeout=20, close_timeout=10,
+                    max_size=10 * 1024 * 1024,
+                )
 
-        hello = {
-            "type": "hello", "version": 1, "features": {"mcp": True},
-            "transport": "websocket",
-            "audio_params": {"format": "opus", "sample_rate": SAMPLE_RATE_IN,
-                             "channels": 1, "frame_duration": FRAME_DURATION_MS},
-        }
-        await self.ws.send(json.dumps(hello))
-        print("[Xiaozhi] 已发送hello")
+            hello = {
+                "type": "hello", "version": 1, "features": {"mcp": True},
+                "transport": "websocket",
+                "audio_params": {"format": "opus", "sample_rate": SAMPLE_RATE_IN,
+                                 "channels": 1, "frame_duration": FRAME_DURATION_MS},
+            }
+            await self.ws.send(json.dumps(hello))
+            print("[Xiaozhi] 已发送hello")
 
-        try:
-            resp = await asyncio.wait_for(self.ws.recv(), timeout=10.0)
-            data = json.loads(resp)
-            print(f"[Xiaozhi] 收到: type={data.get('type')}, keys={list(data.keys())}")
-            if data.get("type") == "hello":
-                self.connected = True
-                self._msg_task = asyncio.create_task(self._msg_loop())
-                print("[Xiaozhi] 握手成功 ✓")
-                if self.on_state_change:
-                    self.on_state_change("idle")
-                return True
-        except asyncio.TimeoutError:
-            print("[Xiaozhi] hello响应超时")
+            try:
+                resp = await asyncio.wait_for(self.ws.recv(), timeout=10.0)
+                data = json.loads(resp)
+                print(f"[Xiaozhi] 收到: type={data.get('type')}, keys={list(data.keys())}")
+                if data.get("type") == "hello":
+                    self.connected = True
+                    self._msg_task = asyncio.create_task(self._msg_loop())
+                    print("[Xiaozhi] 握手成功 ✓")
+                    if self.on_state_change:
+                        self.on_state_change("idle")
+                    return True
+            except asyncio.TimeoutError:
+                print("[Xiaozhi] hello响应超时")
+        except (asyncio.TimeoutError, OSError, ConnectionError) as e:
+            print(f"[Xiaozhi] 连接失败: {e}")
+            try:
+                if self.ws:
+                    await self.ws.close()
+            except Exception:
+                pass
+            self.ws = None
         return False
 
     async def _msg_loop(self):
@@ -163,7 +172,16 @@ class WebBridge:
         self._wake_response_pcm = None  # 预缓存唤醒应答音PCM
         self._feedback_pcm = None      # 反馈提示音(100ms sine chirp)
         self._feedback_triggered = False  # 每轮对话只触发一次反馈
+        self._vad_has_speech = False   # 本轮聆听是否检测到过语音
         self._intent_responses = {}   # {key: numpy PCM} 意图响应预录音频
+        self._intent_texts = {       # {key: str} 意图响应字幕文字
+            "timer_set":    "好的，已设置闹钟",
+            "timer_cancel": "闹钟已取消",
+            "timer_none":   "当前没有闹钟",
+            "light_on":     "灯已打开",
+            "light_off":    "灯已关闭",
+            "brightness":   "亮度已调整",
+        }
         self._skip_tts = False        # 已用本地音频响应, 丢弃服务端TTS
         self._last_send_time = 0.0
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
@@ -210,9 +228,11 @@ class WebBridge:
             def on_audio_data(self, audio_data):
                 if int(np.max(np.abs(audio_data))) > VAD_THRESHOLD:
                     self.bridge._voice_start_time = time.time()
+                    self.bridge._vad_has_speech = True
                     self._silence_frames = 0
                     self.bridge._feedback_triggered = False
                 elif (self.bridge._device_state == DeviceState.LISTENING
+                      and self.bridge._vad_has_speech
                       and not self.bridge._feedback_triggered):
                     self._silence_frames += 1
                     if self._silence_frames >= self._silence_threshold:
@@ -312,12 +332,14 @@ class WebBridge:
         await self._broadcast_json({"type": "state", "state": "listening"})
 
     async def _on_speech_end(self):
-        """用户说完话后300ms静音触发: 播放反馈提示音 + 浏览器显示思考中"""
+        """用户说完话后300ms静音触发: 播放反馈提示音(已禁用)"""
+        return
         if not self._feedback_triggered:
+            return
+        if self._device_state != DeviceState.LISTENING:
             return
         if self._feedback_pcm is not None and self.codec:
             await self.codec.write_pcm_direct(self._feedback_pcm.copy())
-        await self._broadcast_json({"type": "state", "state": "thinking"})
 
     def _trigger_energy_interrupt(self):
         """音频线程回调 -> 调度到主事件循环执行打断逻辑"""
@@ -345,6 +367,7 @@ class WebBridge:
         await self._broadcast_json({"type": "state", "state": "listening"})
 
     async def connect_xiaozhi(self):
+        self._last_xiaozhi_attempt = time.time()
         print(f"[Bridge] 连接xiaozhi: {self.config['xiaozhi_ws_url']}")
         self.xiaozhi = XiaozhiClient(
             self.config["xiaozhi_ws_url"], self.config["xiaozhi_token"],
@@ -501,6 +524,8 @@ class WebBridge:
             asyncio.create_task(self._broadcast_json({
                 "type": "stt", "text": data.get("text", ""),
             }))
+            asyncio.create_task(self._broadcast_json(
+                {"type": "state", "state": "thinking"}))
         elif t == "llm":
             asyncio.create_task(self._broadcast_json({
                 "type": "llm",
@@ -712,8 +737,19 @@ class WebBridge:
             await self._mcp_reply(msg_id, error_msg=f"未知工具: {name}")
 
         if response_key:
-            await self._play_intent_response(response_key)
             self._skip_tts = True
+            subtitle = self._intent_texts.get(response_key, "")
+            if subtitle:
+                asyncio.create_task(self._broadcast_json({
+                    "type": "tts", "state": "sentence_start", "text": subtitle,
+                }))
+            await self._broadcast_json({"type": "state", "state": "speaking"})
+            await self._play_intent_response(response_key)
+            if self._keep_listening:
+                asyncio.create_task(self._auto_restart())
+            else:
+                asyncio.create_task(self._broadcast_json(
+                    {"type": "state", "state": "idle"}))
 
     def _handle_function_call(self, data):
         """处理OpenAI风格的function_call消息"""
@@ -894,7 +930,12 @@ class WebBridge:
             asyncio.create_task(self._try_reconnect())
 
     async def _auto_restart(self):
-        await asyncio.sleep(0.3)
+        if self.codec:
+            for _ in range(120):
+                if self.codec._output_buffer.empty() and not self.codec._resample_output_buffer:
+                    break
+                await asyncio.sleep(0.05)
+            await asyncio.sleep(0.15)
         if self._keep_listening and self.xiaozhi and self.xiaozhi.connected:
             await self.codec.clear_audio_queue()
             await self.xiaozhi.send_text(json.dumps(
@@ -923,6 +964,7 @@ class WebBridge:
             self._cancel_idle_timer()
             self._pre_listen_opus.clear()
             self._feedback_triggered = False
+            self._vad_has_speech = False
             self._skip_tts = False
             if self._wake_word_detector:
                 self._wake_word_detector.paused = True

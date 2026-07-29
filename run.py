@@ -54,17 +54,18 @@ async def main():
     webbrowser.open(url)
 
     print("> 连接xiaozhi服务...")
-    ok = await bridge.connect_xiaozhi()
-    if ok:
-        print("> ✓ 就绪, 点击浏览器按钮开始对话")
-    else:
-        print("> ✗ xiaozhi连接失败, 请检查网络")
-
-    print("> 按 Ctrl+C 退出...")
     try:
-        await bridge.wait_closed()
-    except KeyboardInterrupt:
-        print("\n> 正在关闭...")
+        ok = await bridge.connect_xiaozhi()
+        if ok:
+            print("> ✓ 就绪, 点击浏览器按钮开始对话")
+        else:
+            print("> ✗ xiaozhi连接失败, 请检查网络")
+
+        print("> 按 Ctrl+C 退出...")
+        try:
+            await bridge.wait_closed()
+        except KeyboardInterrupt:
+            print("\n> 正在关闭...")
     finally:
         await bridge.close()
 
