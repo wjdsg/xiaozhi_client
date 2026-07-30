@@ -36,11 +36,9 @@ async def main():
 
     bridge = WebBridge(CONFIG)
 
-    print("> 启动Web服务...")
-    await bridge.start_server()
-
-    print("> 初始化音频设备(麦克风+扬声器)...")
-    await bridge.start_audio()
+    print("> 启动Web服务 + 音频设备 + xiaozhi连接...")
+    xiaozhi_task = asyncio.create_task(bridge.connect_xiaozhi())
+    await asyncio.gather(bridge.start_server(), bridge.start_audio())
 
     print("> 启动唤醒词检测...")
     ww_ok = await bridge.start_wake_word()
@@ -51,22 +49,20 @@ async def main():
 
     url = f"http://{CONFIG['local_host']}:{CONFIG['local_port']}"
 
-    print("> 连接xiaozhi服务...")
+    ok = await xiaozhi_task
+    if ok:
+        print("> ✓ 就绪, 点击浏览器按钮开始对话")
+    else:
+        print("> ✗ xiaozhi连接失败, 请检查网络")
+
+    print(f"> 打开浏览器: {url}")
+    webbrowser.open(url)
+
+    print("> 按 Ctrl+C 退出...")
     try:
-        ok = await bridge.connect_xiaozhi()
-        if ok:
-            print("> ✓ 就绪, 点击浏览器按钮开始对话")
-        else:
-            print("> ✗ xiaozhi连接失败, 请检查网络")
-
-        print(f"> 打开浏览器: {url}")
-        webbrowser.open(url)
-
-        print("> 按 Ctrl+C 退出...")
-        try:
-            await bridge.wait_closed()
-        except KeyboardInterrupt:
-            print("\n> 正在关闭...")
+        await bridge.wait_closed()
+    except KeyboardInterrupt:
+        print("\n> 正在关闭...")
     finally:
         await bridge.close()
 

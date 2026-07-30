@@ -343,7 +343,6 @@ class WebBridge:
         await self.xiaozhi.send_text(json.dumps(
             {"type": "listen", "state": "start", "mode": "auto"}))
         await self._set_state(DeviceState.LISTENING)
-        await self._broadcast_json({"type": "state", "state": "listening"})
 
     async def _on_speech_end(self):
         """用户说完话后300ms静音触发: 播放反馈提示音(已禁用)"""
@@ -378,7 +377,6 @@ class WebBridge:
         for opus_data in buf:
             await self.xiaozhi.send_audio(opus_data)
         await self._set_state(DeviceState.LISTENING)
-        await self._broadcast_json({"type": "state", "state": "listening"})
 
     async def connect_xiaozhi(self):
         self._last_xiaozhi_attempt = time.time()
@@ -392,8 +390,8 @@ class WebBridge:
         self.xiaozhi.on_state_change = self._on_xiaozhi_state
         ok = await self.xiaozhi.connect()
         if ok:
-            self._stop_companion()  # 重连后停掉本地复播
-            await self._broadcast_json({"type": "state", "state": "idle"})
+            self._stop_companion()
+            await self._set_state(DeviceState.IDLE)
         else:
             await self._broadcast_json({"type": "state", "state": "disconnected"})
             await self._broadcast_json({"type": "error", "message": "无法连接xiaozhi服务"})
@@ -481,20 +479,17 @@ class WebBridge:
             await self.xiaozhi.send_text(json.dumps(
                 {"type": "listen", "state": "start", "mode": "auto"}))
             await self._set_state(DeviceState.LISTENING)
-            await self._broadcast_json({"type": "state", "state": "listening"})
             print("[Bridge] 已发送listen start + 状态→listening")
         elif t == "stop_listening":
             self._keep_listening = False
             await self.xiaozhi.send_text(json.dumps({"type": "listen", "state": "stop"}))
             await self._set_state(DeviceState.IDLE)
-            await self._broadcast_json({"type": "state", "state": "idle"})
         elif t == "abort":
             self._keep_listening = False
             await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
             if self.codec:
                 await self.codec.clear_audio_queue()
             await self._set_state(DeviceState.IDLE)
-            await self._broadcast_json({"type": "state", "state": "idle"})
         elif t == "toggle_wake_word":
             enabled = await self.toggle_wake_word()
             await self._broadcast_json({"type": "wake_word", "enabled": enabled})
@@ -575,9 +570,7 @@ class WebBridge:
                     self._try_parse_cancel_from_text(text)
                     self._try_parse_light_from_text(text)
                 asyncio.create_task(self._set_state(DeviceState.SPEAKING))  # 切到SPEAKING, 唤醒词仍活跃可打断
-                asyncio.create_task(self._broadcast_json(
-                    {"type": "state", "state": "speaking"}))
-            if text:
+            if text and state != "sentence_start":
                 asyncio.create_task(self._broadcast_json(
                     {"type": "tts", "state": state, "text": text}))
             elif state != "start":
@@ -759,7 +752,6 @@ class WebBridge:
                 asyncio.create_task(self._broadcast_json({
                     "type": "tts", "state": "sentence_start", "text": subtitle,
                 }))
-            await self._broadcast_json({"type": "state", "state": "speaking"})
             await self._set_state(DeviceState.SPEAKING)
             await self._play_intent_response(response_key)
             if self._keep_listening:
@@ -958,7 +950,6 @@ class WebBridge:
             await self.xiaozhi.send_text(json.dumps(
                 {"type": "listen", "state": "start", "mode": "auto"}))
             await self._set_state(DeviceState.LISTENING)
-            await self._broadcast_json({"type": "state", "state": "listening"})
 
     async def _try_reconnect(self):
         for i in range(5):
@@ -969,6 +960,7 @@ class WebBridge:
 
     async def _set_state(self, state):
         self._device_state = state
+        await self._broadcast_json({"type": "state", "state": state})
         if state == DeviceState.IDLE:
             self._start_idle_timer()
             self._pre_listen_opus.clear()
@@ -1062,14 +1054,14 @@ class WebBridge:
             return
         text, opus_frames = self._tts_cache[-1]
         print(f"[陪伴] 播放缓存道别: {text[:30]}...")
-        await self._broadcast_json({"type": "state", "state": "speaking"})
+        await self._set_state(DeviceState.SPEAKING)
         await self._broadcast_json({"type": "tts", "state": "start", "text": text})
         for opus in opus_frames:
             if self.xiaozhi and self.xiaozhi.connected:
                 return
             await self.codec.write_audio(opus)
         await self._broadcast_json({"type": "tts", "state": "stop"})
-        await self._broadcast_json({"type": "state", "state": "idle"})
+        await self._set_state(DeviceState.IDLE)
 
     # ========== 闹钟记时 ==========
     def _generate_feedback_sound(self):
