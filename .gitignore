@@ -8,3 +8,4 @@ speexdsp/
 log
 logs/
 __pycache__/
+bridge.log
