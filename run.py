@@ -14,16 +14,30 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge import WebBridge
+from src.utils.config_manager import ConfigManager
 
-# ==================== 硬编码配置 (无需用户修改) ====================
-CONFIG = {
-    "xiaozhi_ws_url": "ws://10.150.101.33:5000/xiaozhi/v1/",
-    "xiaozhi_token": "test-token",
-    "device_id": "2c:db:07:09:da:31",
-    "client_id": "cff1e306-cce9-4ff6-b33e-60fefabf32c4",
-    "local_host": "127.0.0.1",
-    "local_port": 8765,
-}
+# ==================== 可移植运行配置 ====================
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG = {"local_host": "127.0.0.1", "local_port": 8765}
+RUNTIME_CONFIG_PATH = os.path.join(PROJECT_DIR, "config", "runtime.json")
+if os.path.isfile(RUNTIME_CONFIG_PATH):
+    with open(RUNTIME_CONFIG_PATH, "r", encoding="utf-8") as config_file:
+        import json
+        CONFIG.update(json.load(config_file))
+
+# 业务服务配置统一从 config/config.json 读取；runtime.json 只负责本地网页服务。
+app_config = ConfigManager.get_instance()
+CONFIG.update({
+    "xiaozhi_ws_url": app_config.get_config(
+        "SYSTEM_OPTIONS.NETWORK.WEBSOCKET_URL",
+        "ws://10.20.149.33:5000/xiaozhi/v1/",
+    ),
+    "xiaozhi_token": app_config.get_config(
+        "SYSTEM_OPTIONS.NETWORK.WEBSOCKET_ACCESS_TOKEN", ""
+    ) or "",
+    "device_id": app_config.get_config("SYSTEM_OPTIONS.DEVICE_ID", "") or "",
+    "client_id": app_config.get_config("SYSTEM_OPTIONS.CLIENT_ID", "") or "",
+})
 
 
 async def main():
@@ -43,7 +57,7 @@ async def main():
     print("> 启动唤醒词检测...")
     ww_ok = await bridge.start_wake_word()
     if ww_ok:
-        print("> ✓ 唤醒词就绪, 说「小智小智」即可唤醒")
+        print("> [OK] 唤醒词就绪, 说「小智小智」即可唤醒")
     else:
         print("> 唤醒词未启用, 需手动点击按钮")
 
@@ -51,9 +65,9 @@ async def main():
 
     ok = await xiaozhi_task
     if ok:
-        print("> ✓ 就绪, 点击浏览器按钮开始对话")
+        print("> [OK] 就绪, 点击浏览器按钮开始对话")
     else:
-        print("> ✗ xiaozhi连接失败, 请检查网络")
+        print("> [ERROR] xiaozhi连接失败, 请检查网络")
 
     print(f"> 打开浏览器: {url}")
     webbrowser.open(url)

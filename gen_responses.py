@@ -15,6 +15,15 @@ items = [
     ("resp_light_on",     "\u706f\u5df2\u6253\u5f00"),
     ("resp_light_off",    "\u706f\u5df2\u5173\u95ed"),
     ("resp_brightness",   "\u4eae\u5ea6\u5df2\u8c03\u6574"),
+
+    ("resp_brightness_low", "灯光已调到低档"),
+    ("resp_brightness_mid", "灯光已调到中档"),
+    ("resp_brightness_high", "灯光已调到高档"),
+    ("resp_volume_0",     "\u97f3\u91cf\u5df2\u9759\u97f3"),
+    ("resp_volume_25",    "\u97f3\u91cf\u5df2\u8c03\u5230\u767e\u5206\u4e4b\u4e8c\u5341\u4e94"),
+    ("resp_volume_50",    "\u97f3\u91cf\u5df2\u8c03\u5230\u767e\u5206\u4e4b\u4e94\u5341"),
+    ("resp_volume_75",    "\u97f3\u91cf\u5df2\u8c03\u5230\u767e\u5206\u4e4b\u4e03\u5341\u4e94"),
+    ("resp_volume_100",   "\u97f3\u91cf\u5df2\u8c03\u5230\u767e\u5206\u4e4b\u4e00\u767e"),
 ]
 
 for filename, text in items:

@@ -88,7 +88,7 @@ class XiaozhiClient:
                 if data.get("type") == "hello":
                     self.connected = True
                     self._msg_task = asyncio.create_task(self._msg_loop())
-                    print("[Xiaozhi] 握手成功 ✓")
+                    print("[Xiaozhi] 握手成功 [OK]")
                     if self.on_state_change:
                         self.on_state_change("idle")
                     return True
@@ -215,6 +215,10 @@ class WebBridge:
     def _setup_routes(self):
         self.app.router.add_get("/", self._handle_index)
         self.app.router.add_get("/ws", self._handle_browser_ws)
+        static_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "static"
+        )
+        self.app.router.add_static("/assets/", static_dir, show_index=False)
 
     # ========== 服务器启动 ==========
     async def start_server(self):
@@ -265,17 +269,15 @@ class WebBridge:
         )
         self._energy_detector.set_interrupt_callback(self._trigger_energy_interrupt)
         self.codec.add_audio_listener(self._energy_detector)
-        print("[Bridge] 音频设备就绪 ✓")
+        print("[Bridge] 音频设备就绪 [OK]")
         await self._preload_wake_response()
 
     async def start_wake_word(self):
         """初始化并启动唤醒词检测"""
         try:
             # 指向我们自己的models目录(含"灵犀台灯"唤醒词)
-            import os as _os
-            _local_models = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "models")
             config = ConfigManager.get_instance()
-            config.update_config("WAKE_WORD_OPTIONS.MODEL_PATH", _local_models)
+            config.update_config("WAKE_WORD_OPTIONS.MODEL_PATH", "models")
             # KWS模型很小, 单线程推理比多线程更快(实测4线程24ms→1线程14ms)且省CPU,
             # 减少与主线程Opus编解码/WebSocket的CPU争抢
             config.update_config("WAKE_WORD_OPTIONS.NUM_THREADS", 1)
@@ -291,7 +293,7 @@ class WebBridge:
             ok = await self._wake_word_detector.start(self.codec)
             if ok:
                 self._wake_word_enabled = True
-                print("[Bridge] 唤醒词检测已启动 ✓")
+                print("[Bridge] 唤醒词检测已启动 [OK]")
                 return True
             else:
                 self._wake_word_detector = None
@@ -320,6 +322,7 @@ class WebBridge:
     async def _on_wake_word(self, wake_word, full_text):
         """唤醒词检测回调 → 自动开始对话"""
         self._wake_detect_time = time.time()
+        await self._broadcast_json({"type": "wake_detected", "wake_word": wake_word})
         voice_latency = (self._wake_detect_time - self._voice_start_time) if self._voice_start_time else 0
         print(f"[Bridge] 唤醒词: {wake_word} | 首音→唤醒: {voice_latency:.2f}s")
         # 断连状态 → 先重连xiaozhi
@@ -497,6 +500,19 @@ class WebBridge:
             mins = float(data.get("minutes", 5))
             label = data.get("label", "")
             asyncio.create_task(self.start_timer(mins, label))
+        elif t == "cancel_timer":
+            self._do_cancel_timer()
+        elif t == "light_toggle":
+            self._light_level = 0 if self._light_level > 0 else 3
+            await self._broadcast_json({
+                "type": "light_state", "level": self._light_level
+            })
+        elif t == "set_brightness":
+            level = int(data.get("level", 3))
+            self._light_level = max(0, min(3, level))
+            await self._broadcast_json({
+                "type": "light_state", "level": self._light_level
+            })
         elif t == "reconnect":
             self._keep_listening = False
             if self.xiaozhi:
@@ -524,9 +540,24 @@ class WebBridge:
         )
 
     # ========== Xiaozhi → 扬声器 + 浏览器 ==========
+    async def _handle_asr_wakeup_response(self, data):
+        """播放服务端ASR分段唤醒的本地预录音，不进入LLM/TTS链路。"""
+        text = data.get("text", "你好，我在")
+        await self._set_state(DeviceState.SPEAKING)
+        await self._broadcast_json({"type": "tts", "state": "start", "text": text})
+        await self._broadcast_json({"type": "tts", "state": "sentence_start", "text": text})
+        await self._play_wake_response()
+        await self._broadcast_json({"type": "tts", "state": "stop"})
+        if self._keep_listening:
+            asyncio.create_task(self._auto_restart())
+        else:
+            await self._set_state(DeviceState.IDLE)
+
     def _on_xiaozhi_json(self, data):
         t = data.get("type", "")
-        if t == "stt":
+        if t == "asr_wakeup_response":
+            asyncio.create_task(self._handle_asr_wakeup_response(data))
+        elif t == "stt":
             if self._speech_start_time and data.get("text"):
                 asr_latency = time.time() - self._speech_start_time
                 msg = f"首音→STT返回: {asr_latency:.2f}s text={data.get('text','')[:30]}"
@@ -666,6 +697,17 @@ class WebBridge:
             },
         },
         {
+            "name": "adjust_brightness",
+            "description": "按当前亮度调高或调低一档。关→低→中→高，反向为高→中→低→关。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "direction": {"type": "string", "enum": ["up", "down"]},
+                },
+                "required": ["direction"],
+            },
+        },
+        {
             "name": "set_brightness",
             "description": "设置台灯亮度档位。0=关,1=弱,2=中,3=亮。",
             "inputSchema": {
@@ -679,6 +721,37 @@ class WebBridge:
                     },
                 },
                 "required": ["level"],
+            },
+        },
+        {
+            "name": "set_volume",
+            "description": "设置台灯扬声器音量。音量只有0、25、50、75、100五档。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "percent": {
+                        "type": "integer",
+                        "description": "目标音量百分比，自动吸附到最近档位",
+                        "minimum": 0,
+                        "maximum": 100,
+                    },
+                },
+                "required": ["percent"],
+            },
+        },
+        {
+            "name": "adjust_volume",
+            "description": "把台灯扬声器音量调高一档或调低一档。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["up", "down"],
+                        "description": "up调高一档，down调低一档",
+                    },
+                },
+                "required": ["direction"],
             },
         }]
         await self._mcp_reply(msg_id, {"tools": tools})
@@ -731,17 +804,43 @@ class WebBridge:
                 "content": [{"type": "text", "text": result_text}],
             })
             await self._broadcast_json({"type": "light_state", "level": self._light_level})
+        elif name == "adjust_brightness":
+            direction = str(args.get("direction", "up")).lower()
+            level = min(3, self._light_level + 1) if direction not in ("down", "lower", "decrease") else max(0, self._light_level - 1)
+            self._light_level = level
+            labels = {0: "灯已关闭", 1: "灯光已调到低档", 2: "灯光已调到中档", 3: "灯光已调到高档"}
+            result_text = labels[level]
+            response_key = {0: "light_off", 1: "brightness_low", 2: "brightness_mid", 3: "brightness_high"}[level]
+            await self._mcp_reply(msg_id, {"content": [{"type": "text", "text": result_text}]})
+            await self._broadcast_json({"type": "light_state", "level": self._light_level})
+        
         elif name == "set_brightness":
             level = int(args.get("level", 3))
             level = max(0, min(3, level))
             self._light_level = level
             labels = {0: "灯已关闭", 1: "灯光已调到弱光", 2: "灯光已调到中等", 3: "灯光已调到全亮"}
             result_text = labels.get(level, f"亮度已设为{level}")
-            response_key = "brightness"
+            response_key = {0: "light_off", 1: "brightness_low", 2: "brightness_mid", 3: "brightness_high"}[level]
             await self._mcp_reply(msg_id, {
                 "content": [{"type": "text", "text": result_text}],
             })
             await self._broadcast_json({"type": "light_state", "level": self._light_level})
+        elif name in ("set_volume", "adjust_volume"):
+            if not self.codec:
+                await self._mcp_reply(msg_id, error_msg="音频设备尚未就绪")
+                return
+            if name == "set_volume":
+                level = self._nearest_volume_level(args.get("percent", 100))
+            else:
+                direction = str(args.get("direction", "up")).lower()
+                level = self._next_volume_level(direction not in ("down", "lower", "decrease"))
+            result_text = f"音量已调到{level}%"
+            response_key = f"volume_{level}"
+            await self._mcp_reply(msg_id, {
+                "content": [{"type": "text", "text": result_text}],
+            })
+            await self._apply_volume_level(level, response_key)
+            return
         else:
             await self._mcp_reply(msg_id, error_msg=f"未知工具: {name}")
 
@@ -773,6 +872,60 @@ class WebBridge:
         self._try_start_timer(name, args)
         self._try_cancel_timer(name, args)
         self._try_light_command(name, args)
+        self._try_volume_command(name, args)
+
+
+    @staticmethod
+    def _nearest_volume_level(value):
+        try:
+            value = max(0, min(100, float(value)))
+        except (TypeError, ValueError):
+            value = 100
+        return min((0, 25, 50, 75, 100), key=lambda level: abs(level - value))
+
+    def _next_volume_level(self, increase):
+        current = self.codec.get_output_volume() if self.codec else 100
+        levels = (0, 25, 50, 75, 100)
+        nearest = self._nearest_volume_level(current)
+        index = levels.index(nearest)
+        index = min(4, index + 1) if increase else max(0, index - 1)
+        return levels[index]
+
+    async def _apply_volume_level(self, level, response_key, abort_server=False):
+        if not self.codec:
+            return
+        level = self._nearest_volume_level(level)
+        if abort_server and self.xiaozhi and self.xiaozhi.connected:
+            await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
+        self._skip_tts = True
+        if level != 0:
+            self.codec.set_output_volume(level)
+        await self._broadcast_json({
+            "type": "tts", "state": "sentence_start", "text": f"音量已调到{level}%"
+        })
+        await self._set_state(DeviceState.SPEAKING)
+        await self._play_intent_response(response_key)
+        if level == 0:
+            self.codec.set_output_volume(0)
+        if self._keep_listening:
+            asyncio.create_task(self._auto_restart())
+        else:
+            await self._set_state(DeviceState.IDLE)
+
+
+    def _try_volume_command(self, name, args):
+        """function_call兜底音量控制。"""
+        if not self.codec or not name:
+            return
+        lowered = str(name).lower()
+        if not any(key in lowered for key in ("set_volume", "adjust_volume", "volume", "音量")):
+            return
+        if "set_volume" in lowered or any(key in args for key in ("percent", "volume", "level")):
+            level = self._nearest_volume_level(args.get("percent", args.get("volume", args.get("level", 100))))
+        else:
+            direction = str(args.get("direction", args.get("action", name))).lower()
+            level = self._next_volume_level(not any(key in direction for key in ("down", "lower", "decrease", "小", "低", "降")))
+        asyncio.create_task(self._apply_volume_level(level, f"volume_{level}"))
 
     def _try_light_command(self, name, args):
         """识别灯泡控制意图"""
@@ -876,7 +1029,7 @@ class WebBridge:
         if self._timer_task and not self._timer_task.done():
             self._timer_task.cancel()
             self._timer_task = None
-            print("[Bridge] 意图识别取消闹钟 ✓")
+            print("[Bridge] 意图识别取消闹钟 [OK]")
             asyncio.create_task(self._broadcast_json({"type": "timer_cancelled"}))
         else:
             print("[Bridge] 意图识别取消闹钟: 当前无运行中的闹钟")
@@ -1084,6 +1237,14 @@ class WebBridge:
             "light_on":     "resp_light_on.mp3",
             "light_off":    "resp_light_off.mp3",
             "brightness":   "resp_brightness.mp3",
+            "brightness_low": "resp_brightness_low.mp3",
+            "brightness_mid": "resp_brightness_mid.mp3",
+            "brightness_high": "resp_brightness_high.mp3",
+            "volume_0":     "resp_volume_0.mp3",
+            "volume_25":    "resp_volume_25.mp3",
+            "volume_50":    "resp_volume_50.mp3",
+            "volume_75":    "resp_volume_75.mp3",
+            "volume_100":   "resp_volume_100.mp3",
         }
         sr = AudioConfig.OUTPUT_SAMPLE_RATE
         for key, fname in files.items():
@@ -1107,6 +1268,8 @@ class WebBridge:
     async def _play_intent_response(self, key):
         """播放预缓存的意图响应PCM音频"""
         pcm = self._intent_responses.get(key)
+        if pcm is None and key in ("brightness_low", "brightness_mid", "brightness_high"):
+            pcm = self._intent_responses.get("brightness")
         if pcm is None or not self.codec:
             return
         frame_size = AudioConfig.OUTPUT_FRAME_SIZE

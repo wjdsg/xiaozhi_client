@@ -303,7 +303,7 @@ class ResourceFinder:
             dirs += [p for p in [Path("C:/ProgramData") / name] if p.exists()]
 
         # 4) 用户数据（可写/覆盖）
-        dirs.append(self.get_user_data_dir(create=True))
+        dirs.append(self.get_user_data_dir(create=False))
 
         # 5) 最后兜底：cwd
         try:

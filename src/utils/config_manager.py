@@ -19,8 +19,8 @@ class ConfigManager:
             "CLIENT_ID": None,
             "DEVICE_ID": None,
             "NETWORK": {
-                "OTA_VERSION_URL": "http://10.73.171.49:8002/xiaozhi/ota/",
-                "WEBSOCKET_URL": "ws://10.73.171.49:8000/xiaozhi/v1/",
+                "OTA_VERSION_URL": "http://10.20.149.33:8002/xiaozhi/ota/",
+                "WEBSOCKET_URL": "ws://10.20.149.33:5000/xiaozhi/v1/",
                 "WEBSOCKET_ACCESS_TOKEN": None,
                 "MQTT_INFO": None,
                 "ACTIVATION_VERSION": "v1",  # 可选值: v1, v2

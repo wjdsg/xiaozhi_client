@@ -115,6 +115,8 @@ class AudioCodec:
         self._ref_resample_buffer = deque()
         self._ref_lock = threading.Lock()
         self._aec_config = self.config.get_config("AEC_OPTIONS") or {}
+        saved_volume = self.config.get_config("AUDIO_DEVICES.output_volume", 100)
+        self._output_volume = max(0.0, min(1.0, float(saved_volume) / 100.0))
 
         # 状态标记
         self._is_closing = False
@@ -644,6 +646,7 @@ class AudioCodec:
 
             # 转换为 float32 用于播放
             mono_samples_float = mono_samples.astype(np.float32) / 32768.0
+            mono_samples_float *= self._output_volume
 
             # 捕获参考信号供 SpeexDSP AEC 使用
             self._capture_reference(mono_samples_float)
@@ -695,6 +698,7 @@ class AudioCodec:
                 for _ in range(frames):
                     frame_data.append(self._resample_output_buffer.popleft())
                 mono_data = np.array(frame_data, dtype=np.float32)
+                mono_data *= self._output_volume
 
                 # 捕获参考信号供 SpeexDSP AEC 使用
                 self._capture_reference(mono_data)
@@ -763,6 +767,18 @@ class AudioCodec:
         if listener not in self._audio_listeners:
             self._audio_listeners.append(listener)
             logger.info(f"已添加音频监听器: {listener.__class__.__name__}")
+
+
+    def set_output_volume(self, percent: int) -> int:
+        """设置软件输出音量并持久化，范围 0-100。"""
+        percent = max(0, min(100, int(percent)))
+        self._output_volume = percent / 100.0
+        self.config.update_config("AUDIO_DEVICES.output_volume", percent)
+        logger.info(f"输出音量已设置为 {percent}%")
+        return percent
+
+    def get_output_volume(self) -> int:
+        return int(round(self._output_volume * 100))
 
     def add_pre_aec_listener(self, listener: AudioListener):
         """添加 pre-AEC 监听器, 在 AEC 处理之前获取原始音频(供 KWS 使用)"""
