@@ -153,6 +153,7 @@ class WebBridge:
         self.codec: AudioCodec | None = None
         self.browser_ws_set = set()
         self._browser_broadcast_lock = asyncio.Lock()
+        self._xiaozhi_connect_lock = asyncio.Lock()
         self.app = web.Application()
         self._setup_routes()
         self._shutdown_event = asyncio.Event()
@@ -170,6 +171,9 @@ class WebBridge:
         self._light_level: int = 0  # 灯泡档位: 0关 1弱 2中等 3全亮
         self._companion_task = None
         self._intentional_standby = False
+        self._standby_reason = ''
+        self._standby_message = ''
+        self._reconnect_task: asyncio.Task | None = None
         self._voice_start_time = 0.0
         self._wake_detect_time = 0.0
         self._wake_response_pcm = None  # 预缓存唤醒应答音PCM
@@ -395,24 +399,31 @@ class WebBridge:
             await self.xiaozhi.send_audio(opus_data)
         await self._set_state(DeviceState.LISTENING)
 
-    async def connect_xiaozhi(self):
-        self._last_xiaozhi_attempt = time.time()
-        print(f"[Bridge] 连接xiaozhi: {self.config['xiaozhi_ws_url']}")
-        self.xiaozhi = XiaozhiClient(
-            self.config["xiaozhi_ws_url"], self.config["xiaozhi_token"],
-            self.config["device_id"], self.config["client_id"],
-        )
-        self.xiaozhi.on_json = self._on_xiaozhi_json
-        self.xiaozhi.on_audio = self._on_xiaozhi_audio
-        self.xiaozhi.on_state_change = self._on_xiaozhi_state
-        ok = await self.xiaozhi.connect()
-        if ok:
-            self._stop_companion()
-            await self._set_state(DeviceState.IDLE)
-        else:
-            await self._broadcast_json({"type": "state", "state": "disconnected"})
-            await self._broadcast_json({"type": "error", "message": "无法连接xiaozhi服务"})
-        return ok
+    async def connect_xiaozhi(self, report_errors=True):
+        async with self._xiaozhi_connect_lock:
+            if self.xiaozhi and self.xiaozhi.connected:
+                return True
+            self._last_xiaozhi_attempt = time.time()
+            print(f"[Bridge] 连接xiaozhi: {self.config['xiaozhi_ws_url']}")
+            if self.xiaozhi:
+                await self.xiaozhi.close()
+            self.xiaozhi = XiaozhiClient(
+                self.config["xiaozhi_ws_url"], self.config["xiaozhi_token"],
+                self.config["device_id"], self.config["client_id"],
+            )
+            self.xiaozhi.on_json = self._on_xiaozhi_json
+            self.xiaozhi.on_audio = self._on_xiaozhi_audio
+            self.xiaozhi.on_state_change = self._on_xiaozhi_state
+            ok = await self.xiaozhi.connect()
+            if ok:
+                self._standby_reason = ""
+                self._standby_message = ""
+                self._stop_companion()
+                await self._set_state(DeviceState.IDLE)
+            elif report_errors:
+                await self._broadcast_json({"type": "state", "state": "disconnected"})
+                await self._broadcast_json({"type": "error", "message": "暂时无法连接，请稍后继续对话"})
+            return ok
 
     async def wait_closed(self):
         await self._shutdown_event.wait()
@@ -420,6 +431,7 @@ class WebBridge:
     async def close(self):
         self._shutdown_event.set()
         self._cancel_idle_timer()
+        self._cancel_reconnect_task()
         self._save_tts_cache()  # 关闭时落盘
         if self._log_task:
             self._log_task.cancel()
@@ -452,7 +464,11 @@ class WebBridge:
         elif self.xiaozhi and not self.xiaozhi.connected:
             if self._intentional_standby:
                 await ws.send_json({"type": "state", "state": "disconnected"})
-                await ws.send_json({"type": "session_end", "reason": "idle_timeout", "message": "长时间未通话，连接已断开，请唤醒或重新连接"})
+                await ws.send_json({
+                    "type": "session_end",
+                    "reason": self._standby_reason or "session_ended",
+                    "message": self._standby_message or "本次对话已结束，可以点击继续对话",
+                })
                 await ws.send_json({"type": "wake_word", "enabled": self._wake_word_enabled})
                 await ws.send_json({"type": "light_state", "level": self._light_level})
                 try:
@@ -520,11 +536,18 @@ class WebBridge:
             await self.xiaozhi.send_text(json.dumps({"type": "listen", "state": "stop"}))
             await self._set_state(DeviceState.IDLE)
         elif t == "abort":
-            self._keep_listening = False
-            await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
+            self._keep_listening = True
+            if self.xiaozhi and self.xiaozhi.connected:
+                await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
             if self.codec:
                 await self.codec.clear_audio_queue()
-            await self._set_state(DeviceState.IDLE)
+            if self.xiaozhi and self.xiaozhi.connected:
+                await self.xiaozhi.send_text(json.dumps(
+                    {"type": "listen", "state": "start", "mode": "auto"}
+                ))
+                await self._set_state(DeviceState.LISTENING)
+            else:
+                await self._set_state("disconnected")
         elif t == "toggle_wake_word":
             enabled = await self.toggle_wake_word()
             await self._broadcast_json({"type": "wake_word", "enabled": enabled})
@@ -545,14 +568,54 @@ class WebBridge:
             await self._broadcast_json({
                 "type": "light_state", "level": self._light_level
             })
+        elif t == "end_conversation":
+            await self._enter_standby(
+                "user_ended", "本次对话已结束，可以点击继续对话"
+            )
         elif t == "reconnect":
-            # 手动重连期间抑制断线回调触发的自动重连，避免重复建立连接。
-            self._intentional_standby = True
-            self._keep_listening = False
-            if self.xiaozhi:
-                await self.xiaozhi.close()
-            self._intentional_standby = False
-            await self.connect_xiaozhi()
+            await self._request_reconnect()
+
+    def _cancel_reconnect_task(self):
+        task = self._reconnect_task
+        if task and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+        self._reconnect_task = None
+
+    async def _enter_standby(self, reason, message):
+        self._cancel_reconnect_task()
+        self._intentional_standby = True
+        self._standby_reason = reason
+        self._standby_message = message
+        self._keep_listening = False
+        self._cancel_idle_timer()
+        if self.xiaozhi and self.xiaozhi.connected:
+            try:
+                await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
+                await self.xiaozhi.send_text(json.dumps({"type": "listen", "state": "stop"}))
+            except Exception:
+                pass
+        if self.codec:
+            await self.codec.clear_audio_queue()
+        if self.xiaozhi:
+            await self.xiaozhi.close()
+        await self._broadcast_json({
+            "type": "session_end", "reason": reason, "message": message,
+        })
+        await self._set_state("disconnected")
+
+    async def _request_reconnect(self):
+        self._cancel_reconnect_task()
+        self._intentional_standby = True
+        self._keep_listening = False
+        if self.xiaozhi:
+            await self.xiaozhi.close()
+        self._intentional_standby = False
+        await self._broadcast_json({"type": "state", "state": "connecting"})
+        ok = await self.connect_xiaozhi(report_errors=False)
+        if not ok:
+            await self._enter_standby(
+                "connection_lost", "暂时无法连接，请检查网络后继续对话"
+            )
 
     # ========== 麦克风 → xiaozhi ==========
     def _on_mic_opus(self, opus_data):
@@ -605,10 +668,9 @@ class WebBridge:
         if t == "asr_wakeup_response":
             asyncio.create_task(self._handle_asr_wakeup_response(data))
         elif t == "session_end" and data.get("reason") == "idle_timeout":
-            self._intentional_standby = True
-            self._keep_listening = False
-            asyncio.create_task(self._broadcast_json({"type": "session_end", "reason": "idle_timeout", "message": "长时间未通话，连接已断开，请唤醒或重新连接"}))
-            asyncio.create_task(self._set_state(DeviceState.DISCONNECTED))
+            asyncio.create_task(self._enter_standby(
+                "idle_timeout", "长时间未交流，本次对话已结束"
+            ))
         elif t == "stt":
             if self._speech_start_time and data.get("text"):
                 asr_latency = time.time() - self._speech_start_time
@@ -1151,12 +1213,16 @@ class WebBridge:
             print(f"[Bridge] TTS播放异常: {e}")
 
     def _on_xiaozhi_state(self, state):
-        asyncio.create_task(self._broadcast_json({"type": "state", "state": state}))
-        if state == "disconnected":
-            self._cancel_idle_timer()
-            # 仅在意外断线时自动重连；服务端空闲结束或用户主动重连时保持初始状态。
-            if not self._intentional_standby:
-                asyncio.create_task(self._try_reconnect())
+        if state != "disconnected":
+            asyncio.create_task(self._broadcast_json({"type": "state", "state": state}))
+            return
+        self._cancel_idle_timer()
+        if self._intentional_standby:
+            asyncio.create_task(self._broadcast_json({"type": "state", "state": "disconnected"}))
+            return
+        asyncio.create_task(self._broadcast_json({"type": "state", "state": "connecting"}))
+        if not self._reconnect_task or self._reconnect_task.done():
+            self._reconnect_task = asyncio.create_task(self._try_reconnect())
 
     async def _auto_restart(self):
         if self.codec:
@@ -1172,11 +1238,28 @@ class WebBridge:
             await self._set_state(DeviceState.LISTENING)
 
     async def _try_reconnect(self):
-        for i in range(5):
-            await asyncio.sleep(min(3 * (i + 1), 15))  # 3/6/9/12/15s退避
-            if await self.connect_xiaozhi():
-                return
-        await self._broadcast_json({"type": "error", "message": "服务连接失败, 请刷新"})
+        resume_listening = self._keep_listening
+        current_task = asyncio.current_task()
+        try:
+            for i in range(5):
+                await asyncio.sleep(min(3 * (i + 1), 15))  # 3/6/9/12/15s退避
+                if self._intentional_standby:
+                    return
+                if self.xiaozhi and self.xiaozhi.connected:
+                    return
+                if await self.connect_xiaozhi(report_errors=False):
+                    if resume_listening and self._keep_listening and not self._intentional_standby:
+                        await self.xiaozhi.send_text(json.dumps(
+                            {"type": "listen", "state": "start", "mode": "auto"}
+                        ))
+                        await self._set_state(DeviceState.LISTENING)
+                    return
+            await self._enter_standby(
+                "connection_lost", "暂时无法连接，请检查网络后继续对话"
+            )
+        finally:
+            if self._reconnect_task is current_task:
+                self._reconnect_task = None
 
     async def _set_state(self, state):
         self._device_state = state
@@ -1203,6 +1286,12 @@ class WebBridge:
                 self._wake_word_detector.paused = False
             if self._energy_detector:
                 self._energy_detector.enable()  # 允许语音打断
+        elif state == "disconnected":
+            self._pre_listen_opus.clear()
+            if self._wake_word_detector:
+                self._wake_word_detector.paused = False
+            if self._energy_detector:
+                self._energy_detector.disable()
 
     def _start_idle_timer(self):
         self._cancel_idle_timer()

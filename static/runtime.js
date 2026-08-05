@@ -53,25 +53,25 @@ const LiveDialog=(function(){
       return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div><div class="runtime-wait-cursor" aria-hidden="true"></div></div><div class="glowbar"></div>';
     }
     if(Runtime.state==='connecting')return '<div class="runtime-center fade">'+mascot(100)+'<div class="runtime-title">正在连接</div><div class="runtime-sub">正在准备语音服务…</div></div>';
-    if(Runtime.state==='disconnected')return '<div class="runtime-center fade">'+mascot(100,true)+'<div class="runtime-title">连接已断开</div><div class="runtime-sub">点击下方“重新连接”继续使用</div></div>';
+    if(Runtime.state==='disconnected'){
+      const connectionFailed=Runtime.sessionEndReason==='connection_lost';
+      const title=connectionFailed?'暂时无法连接':'本次对话已结束';
+      const subtitle=Runtime.errorMessage||(connectionFailed?'请检查网络后继续对话':'点击下方“继续对话”重新开始');
+      return '<div class="runtime-center fade">'+mascot(100,true)+'<div class="runtime-title">'+title+'</div><div class="runtime-sub">'+escapeHtml(subtitle)+'</div></div>';
+    }
     const waves=[12,20,16,22,13].map(function(h,i){return '<div class="wvb" style="height:'+h+'px;animation-delay:'+(i*.15)+'s"></div>';}).join('');
     return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div><div class="runtime-wait-cursor" aria-hidden="true"></div></div><div class="glowbar"></div>';
   }
 
 
   function dialogActionsHtml(){
-    const primaryLabels={
-      connecting:'<i class="ti ti-loader" aria-hidden="true"></i> 连接中',
-      disconnected:'<i class="ti ti-plug-connected" aria-hidden="true"></i> 重新连接',
-      idle:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
-      listening:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
-      thinking:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
-      speaking:'<i class="ti ti-player-stop" aria-hidden="true"></i> 打断'
-    };
-    return '<div class="runtime-dialog-actions">'+
-      '<button class="runtime-dialog-primary" onclick="Runtime.primaryAction()" '+(Runtime.state==='connecting'?'disabled':'')+'>'+primaryLabels[Runtime.state]+'</button>'+
-      '<button onclick="Runtime.reconnect()"><i class="ti ti-refresh" aria-hidden="true"></i> 重连</button>'+
-      '</div>';
+    if(Runtime.state==='connecting')return '';
+    const label=Runtime.state==='disconnected'
+      ?'<i class="ti ti-message-circle" aria-hidden="true"></i> 继续对话'
+      :Runtime.state==='speaking'
+        ?'<i class="ti ti-player-stop" aria-hidden="true"></i> 打断'
+        :'<i class="ti ti-logout" aria-hidden="true"></i> 结束对话';
+    return '<div class="runtime-dialog-actions"><button class="runtime-dialog-primary" onclick="Runtime.primaryAction()">'+label+'</button></div>';
   }
   function render(){
     if(currentApp!=='dialog')return;
@@ -81,7 +81,7 @@ const LiveDialog=(function(){
     }else{
       body='<div id="runtimeChat" class="runtime-chat fade">'+chatHtml()+(Runtime.state==='thinking'?'<div class="runtime-thinking"><i></i><i></i><i></i></div>':'')+'</div>'+(Runtime.state==='speaking'?'<div class="glowbar"></div>':'');
     }
-    const actions=(!messages.length&&(Runtime.state==='idle'||Runtime.state==='listening'))?'':dialogActionsHtml();
+    const actions=dialogActionsHtml();
     $('lamp').innerHTML='<div class="screen-page runtime-dialog-page">'+dialogHeader()+body+actions+'</div>';
     const chat=$('runtimeChat');
     if(chat)chat.scrollTop=chat.scrollHeight;
@@ -91,21 +91,14 @@ const LiveDialog=(function(){
   function updateControls(){
     if(currentApp!=='dialog')return;
     const btn=$('btnPlay');
-    const labels={
-      connecting:'<i class="ti ti-loader" aria-hidden="true"></i> 连接中',
-      disconnected:'<i class="ti ti-plug-connected" aria-hidden="true"></i> 重新连接',
-      idle:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
-      listening:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
-      thinking:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
-      speaking:'<i class="ti ti-player-stop" aria-hidden="true"></i> 打断'
-    };
+    const labels={connecting:'正在准备…',disconnected:'继续对话',idle:'结束对话',listening:'结束对话',thinking:'结束对话',speaking:'打断'};
     btn.innerHTML=labels[Runtime.state]||labels.idle;
     btn.disabled=Runtime.state==='connecting';
     $('btnRe').innerHTML='<i class="ti ti-refresh" aria-hidden="true"></i> 重连';
     $('btnSnd').innerHTML='<i class="ti ti-bell-ringing" aria-hidden="true"></i> 唤醒词'+(Runtime.wakeWordEnabled?'开':'关');
     $('voiceSel').classList.add('hidden');
     $('controls').classList.add('hidden');
-    $('cap').textContent=Runtime.errorMessage||({connecting:'正在连接语音服务',disconnected:'服务已断开，可点击重新连接',idle:'正在准备聆听…',listening:'正在聆听…',thinking:'正在思考…',speaking:'正在播报，点击可打断'}[Runtime.state]||'');
+    $('cap').textContent=Runtime.errorMessage||({connecting:'连接恢复中…',disconnected:'点击“继续对话”重新开始',idle:'正在准备聆听…',listening:'正在聆听…',thinking:'正在思考…',speaking:'正在播报，可随时打断'}[Runtime.state]||'');
   }
 
   function updateUser(data){
@@ -222,6 +215,7 @@ const Runtime={
   timerSeconds:0,
   timerLabel:'',
   pendingDialogStart:false,
+  sessionEndReason:'',
 
   init:function(){
     const self=this;
@@ -265,6 +259,7 @@ const Runtime={
 
   reconnect:function(){
     this.errorMessage='';
+    this.sessionEndReason='';
     if(this.ws&&this.ws.readyState===WebSocket.OPEN)this.send({type:'reconnect'});
     else this.connect();
     this.setState('connecting');
@@ -280,7 +275,11 @@ const Runtime={
   openDialog:function(source){
     const fromWake=source==='wake';
     this.pendingDialogStart=!fromWake;
-    if(!fromWake)LiveDialog.clear();
+    if(!fromWake){
+      LiveDialog.clear();
+      this.errorMessage='';
+      this.sessionEndReason='';
+    }
     openApp('dialog');
     if(!fromWake)this.startDialogListening();
   },
@@ -297,18 +296,20 @@ const Runtime={
   },
 
   primaryAction:function(){
-    if(this.state==='connecting'||this.state==='disconnected'){this.reconnect();return;}
+    if(this.state==='connecting')return;
+    if(this.state==='disconnected'){
+      this.pendingDialogStart=true;
+      LiveDialog.clear();
+      this.reconnect();
+      return;
+    }
     if(this.state==='speaking'){
       this.send({type:'abort'});
       return;
     }
     if(this.state==='listening'||this.state==='thinking'||this.state==='idle'){
       this.pendingDialogStart=false;
-      this.send({type:'stop_listening'});
-    }
-    else{
-      LiveDialog.clear();
-      this.send({type:'start_listening'});
+      this.send({type:'end_conversation'});
     }
   },
 
@@ -344,11 +345,16 @@ const Runtime={
   handleMessage:function(data){
     switch(data.type){
       case 'session_end':
-        this.errorMessage=data.message||"\u957f\u65f6\u95f4\u672a\u901a\u8bdd\uff0c\u8fde\u63a5\u5df2\u65ad\u5f00\uff0c\u8bf7\u5524\u9192\u6216\u91cd\u65b0\u8fde\u63a5";
+        this.sessionEndReason=data.reason||'session_ended';
+        this.errorMessage=data.message||"\u672c\u6b21\u5bf9\u8bdd\u5df2\u7ed3\u675f\uff0c\u53ef\u4ee5\u70b9\u51fb\u7ee7\u7eed\u5bf9\u8bdd";
         LiveDialog.clear();
         this.setState('disconnected');
         break;
       case 'state':
+        if(data.state==='idle'||data.state==='listening'){
+          this.errorMessage='';
+          this.sessionEndReason='';
+        }
         this.setState(data.state);
         if(data.state==='idle'&&this.pendingDialogStart)this.startDialogListening();
         break;
@@ -363,6 +369,11 @@ const Runtime={
       case 'wake_detected':
         if(currentApp!=='dialog')this.openDialog('wake');
         else this.pendingDialogStart=false;
+        if(this.state==='disconnected'){
+          this.errorMessage='';
+          this.sessionEndReason='';
+          this.setState('connecting');
+        }
         LiveDialog.onWakeGreeting("\u4f60\u597d\uff0c\u6211\u5728");
         break;
       case 'wake_word':
@@ -488,7 +499,15 @@ openApp=function(name){
 window.openApp=openApp;
 
 const prototypeShowHome=showHome;
-showHome=function(){prototypeShowHome();Runtime.enhanceHome();Runtime.updateClock();};
+showHome=function(){
+  if(currentApp==='dialog'&&Runtime.state!=='disconnected'){
+    Runtime.pendingDialogStart=false;
+    Runtime.send({type:'end_conversation'});
+  }
+  prototypeShowHome();
+  Runtime.enhanceHome();
+  Runtime.updateClock();
+};
 window.showHome=showHome;
 
 $('btnPlay').onclick=function(){
