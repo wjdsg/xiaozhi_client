@@ -50,11 +50,12 @@ const LiveDialog=(function(){
   function centerHtml(){
     if(Runtime.state==='listening'){
       const waves=[12,20,16,22,13].map(function(h,i){return '<div class="wvb" style="height:'+h+'px;animation-delay:'+(i*.15)+'s"></div>';}).join('');
-      return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div><div class="runtime-sub">正在聆听，请直接说话</div></div><div class="glowbar"></div>';
+      return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div><div class="runtime-wait-cursor" aria-hidden="true"></div></div><div class="glowbar"></div>';
     }
     if(Runtime.state==='connecting')return '<div class="runtime-center fade">'+mascot(100)+'<div class="runtime-title">正在连接</div><div class="runtime-sub">正在准备语音服务…</div></div>';
     if(Runtime.state==='disconnected')return '<div class="runtime-center fade">'+mascot(100,true)+'<div class="runtime-title">连接已断开</div><div class="runtime-sub">点击下方“重新连接”继续使用</div></div>';
-    return '<div class="runtime-center fade"><div style="font-size:58px;font-weight:500;color:#24507e;letter-spacing:4px">'+timeText()+'</div><div style="font-size:15px;color:#5b82ab">今天也很棒，一起加油！</div><div style="display:flex;align-items:center;gap:7px;margin-top:8px"><span class="breath-dot" style="width:10px;height:10px;border-radius:50%;background:#2b9bf4;animation:brea 2.6s infinite ease-in-out"></span><span class="runtime-sub">我在</span></div></div>';
+    const waves=[12,20,16,22,13].map(function(h,i){return '<div class="wvb" style="height:'+h+'px;animation-delay:'+(i*.15)+'s"></div>';}).join('');
+    return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div><div class="runtime-wait-cursor" aria-hidden="true"></div></div><div class="glowbar"></div>';
   }
 
 
@@ -62,7 +63,7 @@ const LiveDialog=(function(){
     const primaryLabels={
       connecting:'<i class="ti ti-loader" aria-hidden="true"></i> 连接中',
       disconnected:'<i class="ti ti-plug-connected" aria-hidden="true"></i> 重新连接',
-      idle:'<i class="ti ti-microphone" aria-hidden="true"></i> 开始对话',
+      idle:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
       listening:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
       thinking:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
       speaking:'<i class="ti ti-player-stop" aria-hidden="true"></i> 打断'
@@ -80,7 +81,8 @@ const LiveDialog=(function(){
     }else{
       body='<div id="runtimeChat" class="runtime-chat fade">'+chatHtml()+(Runtime.state==='thinking'?'<div class="runtime-thinking"><i></i><i></i><i></i></div>':'')+'</div>'+(Runtime.state==='speaking'?'<div class="glowbar"></div>':'');
     }
-    $('lamp').innerHTML='<div class="screen-page runtime-dialog-page">'+dialogHeader()+body+dialogActionsHtml()+'</div>';
+    const actions=(!messages.length&&(Runtime.state==='idle'||Runtime.state==='listening'))?'':dialogActionsHtml();
+    $('lamp').innerHTML='<div class="screen-page runtime-dialog-page">'+dialogHeader()+body+actions+'</div>';
     const chat=$('runtimeChat');
     if(chat)chat.scrollTop=chat.scrollHeight;
     updateControls();
@@ -92,7 +94,7 @@ const LiveDialog=(function(){
     const labels={
       connecting:'<i class="ti ti-loader" aria-hidden="true"></i> 连接中',
       disconnected:'<i class="ti ti-plug-connected" aria-hidden="true"></i> 重新连接',
-      idle:'<i class="ti ti-microphone" aria-hidden="true"></i> 开始对话',
+      idle:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
       listening:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
       thinking:'<i class="ti ti-player-stop" aria-hidden="true"></i> 停止',
       speaking:'<i class="ti ti-player-stop" aria-hidden="true"></i> 打断'
@@ -103,7 +105,7 @@ const LiveDialog=(function(){
     $('btnSnd').innerHTML='<i class="ti ti-bell-ringing" aria-hidden="true"></i> 唤醒词'+(Runtime.wakeWordEnabled?'开':'关');
     $('voiceSel').classList.add('hidden');
     $('controls').classList.add('hidden');
-    $('cap').textContent=Runtime.errorMessage||({connecting:'正在连接语音服务',disconnected:'服务已断开，可点击重新连接',idle:Runtime.wakeWordEnabled?'说“你好灵犀”也可以直接唤醒':'点击开始对话',listening:'正在聆听…',thinking:'正在思考…',speaking:'正在播报，点击可打断'}[Runtime.state]||'');
+    $('cap').textContent=Runtime.errorMessage||({connecting:'正在连接语音服务',disconnected:'服务已断开，可点击重新连接',idle:'正在准备聆听…',listening:'正在聆听…',thinking:'正在思考…',speaking:'正在播报，点击可打断'}[Runtime.state]||'');
   }
 
   function updateUser(data){
@@ -219,6 +221,7 @@ const Runtime={
   timerInterval:null,
   timerSeconds:0,
   timerLabel:'',
+  pendingDialogStart:false,
 
   init:function(){
     const self=this;
@@ -274,13 +277,35 @@ const Runtime={
     if(currentApp==='settings')Settings.render();
   },
 
+  openDialog:function(source){
+    const fromWake=source==='wake';
+    this.pendingDialogStart=!fromWake;
+    if(!fromWake)LiveDialog.clear();
+    openApp('dialog');
+    if(!fromWake)this.startDialogListening();
+  },
+
+  startDialogListening:function(){
+    if(currentApp!=='dialog'||!this.pendingDialogStart)return;
+    if(this.state==='disconnected'){this.reconnect();return;}
+    if(this.state==='connecting'||!this.ws||this.ws.readyState!==WebSocket.OPEN)return;
+    if(this.state==='idle'){
+      if(this.send({type:'start_listening'}))this.pendingDialogStart=false;
+      return;
+    }
+    this.pendingDialogStart=false;
+  },
+
   primaryAction:function(){
     if(this.state==='connecting'||this.state==='disconnected'){this.reconnect();return;}
     if(this.state==='speaking'){
       this.send({type:'abort'});
       return;
     }
-    if(this.state==='listening'||this.state==='thinking')this.send({type:'stop_listening'});
+    if(this.state==='listening'||this.state==='thinking'||this.state==='idle'){
+      this.pendingDialogStart=false;
+      this.send({type:'stop_listening'});
+    }
     else{
       LiveDialog.clear();
       this.send({type:'start_listening'});
@@ -323,7 +348,10 @@ const Runtime={
         LiveDialog.clear();
         this.setState('disconnected');
         break;
-      case 'state':this.setState(data.state);break;
+      case 'state':
+        this.setState(data.state);
+        if(data.state==='idle'&&this.pendingDialogStart)this.startDialogListening();
+        break;
       case 'stt':if(data.text)LiveDialog.onSTT(data);break;
       case 'llm':break;
       case 'tts':LiveDialog.onTTS(data);break;
@@ -333,7 +361,8 @@ const Runtime={
         if(currentApp==='settings')Settings.render();
         break;
       case 'wake_detected':
-        if(currentApp!=='dialog')openApp('dialog');
+        if(currentApp!=='dialog')this.openDialog('wake');
+        else this.pendingDialogStart=false;
         LiveDialog.onWakeGreeting("\u4f60\u597d\uff0c\u6211\u5728");
         break;
       case 'wake_word':

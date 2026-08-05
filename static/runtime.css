@@ -41,3 +41,6 @@
 .runtime-dialog-actions button.on{color:#168a52;background:#e4f7ed}
 .runtime-dialog-actions button:disabled{cursor:wait;opacity:.65;transform:none}
 .runtime-dialog-page .fade{animation:none}
+
+.runtime-wait-cursor{width:4px;height:34px;margin-top:42px;border-radius:999px;background:#2b9bf4;animation:runtimeCursor 1.15s steps(2,end) infinite}
+@keyframes runtimeCursor{0%,48%{opacity:1}49%,100%{opacity:.14}}
