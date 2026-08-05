@@ -152,6 +152,7 @@ class WebBridge:
         self.xiaozhi = None
         self.codec: AudioCodec | None = None
         self.browser_ws_set = set()
+        self._browser_broadcast_lock = asyncio.Lock()
         self.app = web.Application()
         self._setup_routes()
         self._shutdown_event = asyncio.Event()
@@ -168,6 +169,7 @@ class WebBridge:
         self._timer_task: asyncio.Task | None = None  # 当前闹钟任务
         self._light_level: int = 0  # 灯泡档位: 0关 1弱 2中等 3全亮
         self._companion_task = None
+        self._intentional_standby = False
         self._voice_start_time = 0.0
         self._wake_detect_time = 0.0
         self._wake_response_pcm = None  # 预缓存唤醒应答音PCM
@@ -182,8 +184,18 @@ class WebBridge:
             "light_on":     "灯已打开",
             "light_off":    "灯已关闭",
             "brightness":   "亮度已调整",
+            "brightness_low":  "灯光已调到低档",
+            "brightness_mid":  "灯光已调到中档",
+            "brightness_high": "灯光已调到高档",
+            "volume_0":     "音量已静音",
+            "volume_25":    "音量已调到百分之二十五",
+            "volume_50":    "音量已调到百分之五十",
+            "volume_75":    "音量已调到百分之七十五",
+            "volume_100":   "音量已调到百分之一百",
         }
         self._skip_tts = False        # 已用本地音频响应, 丢弃服务端TTS
+        self._local_intent_feedback_active = False
+        self._subtitle_turn_id = 0
         self._last_send_time = 0.0
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
         self._pre_listen_opus = deque(maxlen=50)  # 打断前缓存的 Opus 帧(约1秒)
@@ -321,6 +333,8 @@ class WebBridge:
 
     async def _on_wake_word(self, wake_word, full_text):
         """唤醒词检测回调 → 自动开始对话"""
+        # 唤醒代表用户明确要求恢复会话，允许从服务端空闲断联状态重连。
+        self._intentional_standby = False
         self._wake_detect_time = time.time()
         await self._broadcast_json({"type": "wake_detected", "wake_word": wake_word})
         voice_latency = (self._wake_detect_time - self._voice_start_time) if self._voice_start_time else 0
@@ -436,6 +450,23 @@ class WebBridge:
         if self.xiaozhi and self.xiaozhi.connected:
             await ws.send_json({"type": "state", "state": "idle"})
         elif self.xiaozhi and not self.xiaozhi.connected:
+            if self._intentional_standby:
+                await ws.send_json({"type": "state", "state": "disconnected"})
+                await ws.send_json({"type": "session_end", "reason": "idle_timeout", "message": "长时间未通话，连接已断开，请唤醒或重新连接"})
+                await ws.send_json({"type": "wake_word", "enabled": self._wake_word_enabled})
+                await ws.send_json({"type": "light_state", "level": self._light_level})
+                try:
+                    async for msg in ws:
+                        if msg.type == WSMsgType.TEXT:
+                            try:
+                                await self._on_browser_cmd(json.loads(msg.data))
+                            except json.JSONDecodeError:
+                                pass
+                        elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSED):
+                            break
+                finally:
+                    self.browser_ws_set.discard(ws)
+                return
             now = time.time()
             if now - self._last_xiaozhi_attempt < 6:
                 await ws.send_json({"type": "state", "state": "connecting"})
@@ -474,6 +505,7 @@ class WebBridge:
         t = data.get("type", "")
         print(f"[Bridge] 浏览器命令: {t}")
         if t == "start_listening":
+            self._intentional_standby = False
             if not self.xiaozhi or not self.xiaozhi.connected:
                 await self._broadcast_json({"type": "error", "message": "xiaozhi未连接"})
                 return
@@ -514,9 +546,12 @@ class WebBridge:
                 "type": "light_state", "level": self._light_level
             })
         elif t == "reconnect":
+            # 手动重连期间抑制断线回调触发的自动重连，避免重复建立连接。
+            self._intentional_standby = True
             self._keep_listening = False
             if self.xiaozhi:
                 await self.xiaozhi.close()
+            self._intentional_standby = False
             await self.connect_xiaozhi()
 
     # ========== 麦克风 → xiaozhi ==========
@@ -553,21 +588,37 @@ class WebBridge:
         else:
             await self._set_state(DeviceState.IDLE)
 
+    async def _forward_stt_to_browser(self, data, turn_id):
+        """保证ASR字幕先于思考状态到达浏览器。"""
+        await self._broadcast_json({
+            "type": "stt",
+            "text": data.get("text", ""),
+            "session_id": data.get("session_id", ""),
+            "turn_id": turn_id,
+            "final": True,
+        })
+        await self._broadcast_json({
+            "type": "state", "state": "thinking", "turn_id": turn_id,
+        })
     def _on_xiaozhi_json(self, data):
         t = data.get("type", "")
         if t == "asr_wakeup_response":
             asyncio.create_task(self._handle_asr_wakeup_response(data))
+        elif t == "session_end" and data.get("reason") == "idle_timeout":
+            self._intentional_standby = True
+            self._keep_listening = False
+            asyncio.create_task(self._broadcast_json({"type": "session_end", "reason": "idle_timeout", "message": "长时间未通话，连接已断开，请唤醒或重新连接"}))
+            asyncio.create_task(self._set_state(DeviceState.DISCONNECTED))
         elif t == "stt":
             if self._speech_start_time and data.get("text"):
                 asr_latency = time.time() - self._speech_start_time
                 msg = f"首音→STT返回: {asr_latency:.2f}s text={data.get('text','')[:30]}"
                 print(f"[Log] {msg}")
                 self._log(msg)
-            asyncio.create_task(self._broadcast_json({
-                "type": "stt", "text": data.get("text", ""),
-            }))
-            asyncio.create_task(self._broadcast_json(
-                {"type": "state", "state": "thinking"}))
+            self._subtitle_turn_id += 1
+            asyncio.create_task(
+                self._forward_stt_to_browser(data, self._subtitle_turn_id)
+            )
         elif t == "llm":
             asyncio.create_task(self._broadcast_json({
                 "type": "llm",
@@ -578,8 +629,6 @@ class WebBridge:
             if self._skip_tts:
                 if state == "stop":
                     self._skip_tts = False
-                    if self._keep_listening:
-                        asyncio.create_task(self._auto_restart())
                 return
             text = data.get("text", "")
             if state == "start" and self._speech_start_time:
@@ -590,7 +639,8 @@ class WebBridge:
             # 处理 sentence_start 里的文字 (字幕)
             if state == "sentence_start" and data.get("text"):
                 asyncio.create_task(self._broadcast_json(
-                    {"type": "tts", "state": state, "text": data.get("text")}))
+                    {"type": "tts", "state": state, "text": data.get("text"),
+                     "session_id": data.get("session_id", ""), "turn_id": self._subtitle_turn_id}))
             print(f"[Bridge] TTS: {state}" + (f" text={text[:40]}..." if text else ""))
             if state == "start":
                 self._current_opus_buf = []
@@ -603,10 +653,12 @@ class WebBridge:
                 asyncio.create_task(self._set_state(DeviceState.SPEAKING))  # 切到SPEAKING, 唤醒词仍活跃可打断
             if text and state != "sentence_start":
                 asyncio.create_task(self._broadcast_json(
-                    {"type": "tts", "state": state, "text": text}))
+                    {"type": "tts", "state": state, "text": text,
+                     "session_id": data.get("session_id", ""), "turn_id": self._subtitle_turn_id}))
             elif state != "start":
                 asyncio.create_task(self._broadcast_json(
-                    {"type": "tts", "state": state}))
+                    {"type": "tts", "state": state, "session_id": data.get("session_id", ""),
+                     "turn_id": self._subtitle_turn_id}))
             if state == "stop":
                 if self._current_opus_buf and self._current_tts_text:
                     self._tts_cache.append((self._current_tts_text, list(self._current_opus_buf)))
@@ -756,6 +808,29 @@ class WebBridge:
         }]
         await self._mcp_reply(msg_id, {"tools": tools})
 
+    async def _play_local_intent_feedback(self, response_key, subtitle):
+        """按确定顺序发送字幕并播放内存中的本地反馈音频。"""
+        subtitle = subtitle or self._intent_texts.get(response_key, "")
+        self._skip_tts = True
+        self._local_intent_feedback_active = True
+        try:
+            await self._broadcast_json({
+                "type": "tts", "state": "start", "local": True,
+                "turn_id": self._subtitle_turn_id,
+            })
+            if subtitle:
+                await self._broadcast_json({
+                    "type": "tts", "state": "sentence_start", "text": subtitle,
+                    "local": True, "turn_id": self._subtitle_turn_id,
+                })
+            await self._set_state(DeviceState.SPEAKING)
+            await self._play_intent_response(response_key)
+        finally:
+            await self._broadcast_json({
+                "type": "tts", "state": "stop", "local": True,
+                "turn_id": self._subtitle_turn_id,
+            })
+            self._local_intent_feedback_active = False
     async def _mcp_tools_call(self, msg_id, params):
         name = params.get("name", "")
         args = params.get("arguments", {})
@@ -845,19 +920,12 @@ class WebBridge:
             await self._mcp_reply(msg_id, error_msg=f"未知工具: {name}")
 
         if response_key:
-            self._skip_tts = True
-            subtitle = self._intent_texts.get(response_key, "")
-            if subtitle:
-                asyncio.create_task(self._broadcast_json({
-                    "type": "tts", "state": "sentence_start", "text": subtitle,
-                }))
-            await self._set_state(DeviceState.SPEAKING)
-            await self._play_intent_response(response_key)
+            subtitle = self._intent_texts.get(response_key, result_text)
+            await self._play_local_intent_feedback(response_key, subtitle)
             if self._keep_listening:
                 asyncio.create_task(self._auto_restart())
             else:
-                asyncio.create_task(self._broadcast_json(
-                    {"type": "state", "state": "idle"}))
+                await self._set_state(DeviceState.IDLE)
 
     def _handle_function_call(self, data):
         """处理OpenAI风格的function_call消息"""
@@ -897,14 +965,11 @@ class WebBridge:
         level = self._nearest_volume_level(level)
         if abort_server and self.xiaozhi and self.xiaozhi.connected:
             await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
-        self._skip_tts = True
         if level != 0:
             self.codec.set_output_volume(level)
-        await self._broadcast_json({
-            "type": "tts", "state": "sentence_start", "text": f"音量已调到{level}%"
-        })
-        await self._set_state(DeviceState.SPEAKING)
-        await self._play_intent_response(response_key)
+        await self._play_local_intent_feedback(
+            response_key, self._intent_texts.get(response_key, f"音量已调到{level}%")
+        )
         if level == 0:
             self.codec.set_output_volume(0)
         if self._keep_listening:
@@ -1089,7 +1154,9 @@ class WebBridge:
         asyncio.create_task(self._broadcast_json({"type": "state", "state": state}))
         if state == "disconnected":
             self._cancel_idle_timer()
-            asyncio.create_task(self._try_reconnect())
+            # 仅在意外断线时自动重连；服务端空闲结束或用户主动重连时保持初始状态。
+            if not self._intentional_standby:
+                asyncio.create_task(self._try_reconnect())
 
     async def _auto_restart(self):
         if self.codec:
@@ -1115,7 +1182,7 @@ class WebBridge:
         self._device_state = state
         await self._broadcast_json({"type": "state", "state": state})
         if state == DeviceState.IDLE:
-            self._start_idle_timer()
+            # 空闲只表示等待唤醒，不再由客户端30秒主动断开连接
             self._pre_listen_opus.clear()
             if self._wake_word_detector:
                 self._wake_word_detector.paused = False
@@ -1400,8 +1467,9 @@ class WebBridge:
 
     # ========== 广播 ==========
     async def _broadcast_json(self, data):
-        for ws in list(self.browser_ws_set):
-            try:
-                await ws.send_json(data)
-            except Exception:
-                self.browser_ws_set.discard(ws)
+        async with self._browser_broadcast_lock:
+            for ws in list(self.browser_ws_set):
+                try:
+                    await ws.send_json(data)
+                except Exception:
+                    self.browser_ws_set.discard(ws)

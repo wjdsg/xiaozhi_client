@@ -34,6 +34,8 @@ const LiveDialog=(function(){
   let messages=[];
   let lastUserText='';
   let typeTimer=null;
+  let messageSequence=0;
+  let activeAssistantTurn=null;
 
   function clearTypeTimer(){
     if(typeTimer){clearInterval(typeTimer);typeTimer=null;}
@@ -68,7 +70,6 @@ const LiveDialog=(function(){
     return '<div class="runtime-dialog-actions">'+
       '<button class="runtime-dialog-primary" onclick="Runtime.primaryAction()" '+(Runtime.state==='connecting'?'disabled':'')+'>'+primaryLabels[Runtime.state]+'</button>'+
       '<button onclick="Runtime.reconnect()"><i class="ti ti-refresh" aria-hidden="true"></i> 重连</button>'+
-      '<button class="'+(Runtime.wakeWordEnabled?'on':'')+'" onclick="Runtime.toggleWakeWord()"><i class="ti ti-bell-ringing" aria-hidden="true"></i> 唤醒词'+(Runtime.wakeWordEnabled?'开':'关')+'</button>'+
       '</div>';
   }
   function render(){
@@ -105,34 +106,48 @@ const LiveDialog=(function(){
     $('cap').textContent=Runtime.errorMessage||({connecting:'正在连接语音服务',disconnected:'服务已断开，可点击重新连接',idle:Runtime.wakeWordEnabled?'说“你好灵犀”也可以直接唤醒':'点击开始对话',listening:'正在聆听…',thinking:'正在思考…',speaking:'正在播报，点击可打断'}[Runtime.state]||'');
   }
 
-  function updateUser(text){
+  function updateUser(data){
+    const text=typeof data==='string'?data:(data&&data.text)||'';
     if(!text)return;
+    const turnId=data&&data.turn_id!=null?'user-'+String(data.turn_id):'user-local-'+(++messageSequence);
     lastUserText=text;
     const last=messages[messages.length-1];
-    if(last&&last.role==='user')last.text=text;
-    else messages.push({role:'user',text:text});
+    if(last&&last.role==='user'&&last.turnId===turnId)last.text=text;
+    else messages.push({role:'user',text:text,turnId:turnId});
     render();
   }
 
-  function typeAnswer(text){
-    clearTypeTimer();
-    let answer=messages[messages.length-1];
-    if(!answer||answer.role!=='assistant'){
-      answer={role:'assistant',text:''};
+  function typeAnswer(data){
+    const text=typeof data==='string'?data:(data&&data.text)||'';
+    if(!text){render();return;}
+    const turnId=data&&data.turn_id!=null?'assistant-'+String(data.turn_id):(activeAssistantTurn||'assistant-local-'+(++messageSequence));
+    activeAssistantTurn=turnId;
+    let answer=null;
+    for(let i=messages.length-1;i>=0;i--){
+      if(messages[i].role==='assistant'&&messages[i].turnId===turnId){answer=messages[i];break;}
+    }
+    if(!answer){
+      answer={role:'assistant',text:'',targetText:'',segments:[],turnId:turnId};
       messages.push(answer);
     }
-    let index=Math.min(answer.text.length,text.length);
-    answer.text=text.slice(0,index);
+    if(!answer.segments)answer.segments=[];
+    if(answer.segments.indexOf(text)!==-1){render();return;}
+    answer.segments.push(text);
+    answer.targetText=(answer.targetText||answer.text||'')+text;
+    clearTypeTimer();
     render();
     typeTimer=setInterval(function(){
-      index++;
-      answer.text=text.slice(0,index);
-      const bubbles=document.querySelectorAll('#runtimeChat .ab');
-      const el=bubbles[bubbles.length-1];
-      if(el)el.textContent=answer.text;
+      if(answer.text.length>=answer.targetText.length){clearTypeTimer();return;}
+      answer.text=answer.targetText.slice(0,answer.text.length+1);
       const chat=$('runtimeChat');
-      if(chat)chat.scrollTop=chat.scrollHeight;
-      if(index>=text.length)clearTypeTimer();
+      if(chat){
+        const bubbles=chat.querySelectorAll('.ab');
+        for(let i=bubbles.length-1;i>=0;i--){
+          const item=messages.filter(function(message){return message.role==='assistant';})[i];
+          if(item===answer){bubbles[i].textContent=answer.text;break;}
+        }
+        chat.scrollTop=chat.scrollHeight;
+      }
     },30);
   }
 
@@ -148,15 +163,22 @@ const LiveDialog=(function(){
     togglePlay:function(){Runtime.primaryAction();return Runtime.state!=='idle';},
     render:render,
     updateControls:updateControls,
-    clear:function(){clearTypeTimer();messages=[];lastUserText='';render();},
+    clear:function(){clearTypeTimer();messages=[];lastUserText='';activeAssistantTurn=null;render();},
+    onWakeGreeting:function(text){
+      clearTypeTimer();
+      const greeting=text||"\u4f60\u597d\uff0c\u6211\u5728";
+      const turnId='wake-'+(++messageSequence);
+      messages.push({role:'assistant',text:greeting,targetText:greeting,segments:[greeting],turnId:turnId});
+      activeAssistantTurn=null;
+      render();
+    },
     onSTT:updateUser,
     onTTS:function(data){
-      if(data.state==='start' && lastUserText){
-        const last=messages[messages.length-1];
-        if(!last || last.role!=='user')messages.push({role:'user',text:lastUserText});
-      }
-      if(data.text)typeAnswer(data.text);
+      data=data||{};
+      if(data.state==='start')activeAssistantTurn=data.turn_id!=null?'assistant-'+String(data.turn_id):'assistant-local-'+(++messageSequence);
+      if(data.text)typeAnswer(data);
       else render();
+      if(data.state==='stop')activeAssistantTurn=null;
     }
   };
 })();
@@ -169,7 +191,7 @@ const Settings=(function(){
       '<div class="topbar"><span>'+timeText()+'</span><span>'+statusIcon(Runtime.state)+'</span></div>'+
       '<div class="head">'+mascot(30,true)+'<span class="head-name">设置</span><div class="head-right">设备与提醒</div></div>'+
       '<div class="card fade">'+
-        '<div class="runtime-setting-row"><div><strong>语音唤醒</strong><div class="runtime-sub">说“你好灵犀”开始对话</div></div><button id="runtimeWakeToggle" class="runtime-chip '+(Runtime.wakeWordEnabled?'on':'')+'" onclick="Runtime.toggleWakeWord()">'+(Runtime.wakeWordEnabled?'已开启':'已关闭')+'</button></div>'+
+        '<div class="runtime-setting-row"><div><strong>\u8bed\u97f3\u5524\u9192</strong><div class="runtime-sub">\u8bf4\u201c\u4f60\u597d\u7075\u7280\u201d\u5f00\u59cb\u5bf9\u8bdd</div></div><button id="runtimeWakeToggle" class="runtime-chip '+(Runtime.wakeWordPending?'pending':Runtime.wakeWordEnabled?'on':'')+'" onclick="Runtime.toggleWakeWord()" '+(Runtime.wakeWordPending?'disabled':'')+'>'+(Runtime.wakeWordPending?(Runtime.wakeWordPendingTarget?'\u6b63\u5728\u5f00\u542f\u2026':'\u6b63\u5728\u5173\u95ed\u2026'):(Runtime.wakeWordEnabled?'\u5df2\u5f00\u542f':'\u5df2\u5173\u95ed'))+'</button></div>'+
         '<div class="runtime-setting-row"><div><strong>服务状态</strong><div class="runtime-sub" id="runtimeServiceText">'+escapeHtml(Runtime.stateLabel())+'</div></div><button class="runtime-chip" onclick="Runtime.reconnect()">重新连接</button></div>'+
       '</div>'+
       '<div class="card fade"><div><strong style="font-size:14px">倒计时</strong><div class="runtime-sub">输入分钟数，最多 999 分钟</div></div><div class="runtime-timer-form"><input id="runtimeTimerInput" type="number" min="1" max="999" inputmode="numeric" placeholder="分钟"><button class="primary-btn" onclick="Runtime.setTimerFromInput()">开始</button></div><div id="runtimeTimerSlot"></div></div>'+
@@ -188,6 +210,9 @@ const Runtime={
   ws:null,
   state:'connecting',
   wakeWordEnabled:false,
+  wakeWordPending:false,
+  wakeWordPendingTarget:null,
+  wakeWordRequestTimer:null,
   errorMessage:'',
   reconnectDelay:1000,
   reconnectTimer:null,
@@ -253,7 +278,6 @@ const Runtime={
     if(this.state==='connecting'||this.state==='disconnected'){this.reconnect();return;}
     if(this.state==='speaking'){
       this.send({type:'abort'});
-      LiveDialog.clear();
       return;
     }
     if(this.state==='listening'||this.state==='thinking')this.send({type:'stop_listening'});
@@ -263,12 +287,44 @@ const Runtime={
     }
   },
 
-  toggleWakeWord:function(){this.send({type:'toggle_wake_word'});},
-
+  toggleWakeWord:function(){
+    if(this.wakeWordPending)return false;
+    if(!this.ws||this.ws.readyState!==WebSocket.OPEN){
+      this.errorMessage="\u8bf7\u5148\u8fde\u63a5\u8bed\u97f3\u670d\u52a1";
+      LiveDialog.render();
+      if(currentApp==='settings')Settings.render();
+      return false;
+    }
+    const target=!this.wakeWordEnabled;
+    this.wakeWordPending=true;
+    this.wakeWordPendingTarget=target;
+    this.errorMessage="";
+    this.updateHomeIndicators();
+    LiveDialog.render();
+    if(currentApp==='settings')Settings.render();
+    this.send({type:"toggle_wake_word"});
+    if(this.wakeWordRequestTimer)clearTimeout(this.wakeWordRequestTimer);
+    const self=this;
+    this.wakeWordRequestTimer=setTimeout(function(){
+      if(!self.wakeWordPending)return;
+      self.wakeWordPending=false;
+      self.wakeWordPendingTarget=null;
+      self.errorMessage="\u5524\u9192\u8bcd\u64cd\u4f5c\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u670d\u52a1\u8fde\u63a5";
+      self.updateHomeIndicators();
+      LiveDialog.render();
+      if(currentApp==='settings')Settings.render();
+    },10000);
+    return true;
+  },
   handleMessage:function(data){
     switch(data.type){
+      case 'session_end':
+        this.errorMessage=data.message||"\u957f\u65f6\u95f4\u672a\u901a\u8bdd\uff0c\u8fde\u63a5\u5df2\u65ad\u5f00\uff0c\u8bf7\u5524\u9192\u6216\u91cd\u65b0\u8fde\u63a5";
+        LiveDialog.clear();
+        this.setState('disconnected');
+        break;
       case 'state':this.setState(data.state);break;
-      case 'stt':if(data.text)LiveDialog.onSTT(data.text);break;
+      case 'stt':if(data.text)LiveDialog.onSTT(data);break;
       case 'llm':break;
       case 'tts':LiveDialog.onTTS(data);break;
       case 'error':
@@ -277,11 +333,18 @@ const Runtime={
         if(currentApp==='settings')Settings.render();
         break;
       case 'wake_detected':
-        LiveDialog.clear();
         if(currentApp!=='dialog')openApp('dialog');
+        LiveDialog.onWakeGreeting("\u4f60\u597d\uff0c\u6211\u5728");
         break;
       case 'wake_word':
+        const requested=this.wakeWordPendingTarget;
+        if(this.wakeWordRequestTimer)clearTimeout(this.wakeWordRequestTimer);
+        this.wakeWordRequestTimer=null;
+        this.wakeWordPending=false;
+        this.wakeWordPendingTarget=null;
         this.wakeWordEnabled=!!data.enabled;
+        if(requested!==null&&this.wakeWordEnabled!==requested)this.errorMessage="\u5524\u9192\u8bcd\u64cd\u4f5c\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u6a21\u578b\u6216\u9ea6\u514b\u98ce";
+        else if(requested!==null)this.errorMessage="";
         this.updateHomeIndicators();
         LiveDialog.render();
         if(currentApp==='settings')Settings.render();
@@ -371,7 +434,7 @@ const Runtime={
       if(wifi)wifi.className='ti ti-wifi runtime-status '+(this.state==='connecting'?'connecting':this.state==='disconnected'?'offline':'online');
     }
     const text=document.querySelector('.home-bar-text');
-    if(text)text.textContent=this.wakeWordEnabled?'说“你好灵犀”随时叫我':'语音唤醒已关闭，点击这里开启';
+    if(text)text.textContent=this.wakeWordPending?(this.wakeWordPendingTarget?"\u6b63\u5728\u5f00\u542f\u8bed\u97f3\u5524\u9192\u2026":"\u6b63\u5728\u5173\u95ed\u8bed\u97f3\u5524\u9192\u2026"):this.wakeWordEnabled?"\u8bf4\u201c\u4f60\u597d\u7075\u7280\u201d\u968f\u65f6\u53eb\u6211":"\u8bed\u97f3\u5524\u9192\u5df2\u5173\u95ed\uff0c\u70b9\u51fb\u8fd9\u91cc\u5f00\u542f";
   }
 };
 
@@ -414,7 +477,7 @@ $('btnRe').onclick=function(){
 };
 
 $('btnSnd').onclick=function(){
-  if(currentApp==='dialog'){Runtime.toggleWakeWord();return;}
+  if(currentApp==='dialog')return;
   if(currentApp==='home'||currentApp==='settings')return;
   Voice.on=!Voice.on;
   this.innerHTML=Voice.on?'<i class="ti ti-volume" aria-hidden="true"></i> 关闭语音':'<i class="ti ti-volume" aria-hidden="true"></i> 开启语音';
