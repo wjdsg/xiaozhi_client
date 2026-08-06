@@ -24,6 +24,7 @@ items = [
     ("resp_volume_50",    "\u97f3\u91cf\u5df2\u8c03\u5230\u767e\u5206\u4e4b\u4e94\u5341"),
     ("resp_volume_75",    "\u97f3\u91cf\u5df2\u8c03\u5230\u767e\u5206\u4e4b\u4e03\u5341\u4e94"),
     ("resp_volume_100",   "\u97f3\u91cf\u5df2\u8c03\u5230\u767e\u5206\u4e4b\u4e00\u767e"),
+    ("resp_dialog_exit",  "\u597d\u7684\uff0c\u5df2\u7ed3\u675f\u672c\u6b21\u5bf9\u8bdd"),
 ]
 
 for filename, text in items:

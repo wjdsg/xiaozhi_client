@@ -105,6 +105,7 @@ class XiaozhiClient:
         return False
 
     async def _msg_loop(self):
+        close_info = {"code": None, "reason": "", "source": "remote"}
         try:
             async for msg in self.ws:
                 if isinstance(msg, str):
@@ -121,13 +122,28 @@ class XiaozhiClient:
                         await self.on_audio(msg)  # 内联解码, 不创建任务
         except websockets.ConnectionClosed as e:
             print(f"[Xiaozhi] 连接关闭: {e}")
+            close_info = {
+                "code": getattr(e, "code", None),
+                "reason": getattr(e, "reason", "") or "",
+                "source": "websocket",
+            }
         except Exception as e:
             print(f"[Xiaozhi] 错误: {e}")
+            close_info = {
+                "code": None,
+                "reason": str(e),
+                "source": "exception",
+            }
         finally:
+            if close_info["code"] is None and self.ws:
+                close_info["code"] = getattr(self.ws, "close_code", None)
+                close_info["reason"] = (
+                    getattr(self.ws, "close_reason", "") or close_info["reason"]
+                )
             was = self.connected
             self.connected = False
             if was and self.on_state_change:
-                self.on_state_change("disconnected")
+                self.on_state_change("disconnected", close_info)
 
     async def send_text(self, text):
         if self.ws and self.connected:
@@ -173,6 +189,7 @@ class WebBridge:
         self._intentional_standby = False
         self._standby_reason = ''
         self._standby_message = ''
+        self._session_end_pending = False
         self._reconnect_task: asyncio.Task | None = None
         self._voice_start_time = 0.0
         self._wake_detect_time = 0.0
@@ -196,6 +213,7 @@ class WebBridge:
             "volume_50":    "音量已调到百分之五十",
             "volume_75":    "音量已调到百分之七十五",
             "volume_100":   "音量已调到百分之一百",
+            "dialog_exit":  "\u597d\u7684\uff0c\u5df2\u7ed3\u675f\u672c\u6b21\u5bf9\u8bdd",
         }
         self._skip_tts = False        # 已用本地音频响应, 丢弃服务端TTS
         self._local_intent_feedback_active = False
@@ -588,19 +606,13 @@ class WebBridge:
         self._standby_message = message
         self._keep_listening = False
         self._cancel_idle_timer()
-        if self.xiaozhi and self.xiaozhi.connected:
-            try:
-                await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
-                await self.xiaozhi.send_text(json.dumps({"type": "listen", "state": "stop"}))
-            except Exception:
-                pass
         if self.codec:
             await self.codec.clear_audio_queue()
-        if self.xiaozhi:
-            await self.xiaozhi.close()
         await self._broadcast_json({
             "type": "session_end", "reason": reason, "message": message,
         })
+        if self.xiaozhi:
+            await self.xiaozhi.close()
         await self._set_state("disconnected")
 
     async def _request_reconnect(self):
@@ -667,10 +679,21 @@ class WebBridge:
         t = data.get("type", "")
         if t == "asr_wakeup_response":
             asyncio.create_task(self._handle_asr_wakeup_response(data))
-        elif t == "session_end" and data.get("reason") == "idle_timeout":
-            asyncio.create_task(self._enter_standby(
-                "idle_timeout", "长时间未交流，本次对话已结束"
-            ))
+        elif t == "session_end":
+            reason = data.get("reason") or "server_ended"
+            message = data.get("message") or (
+                "长时间未交流，本次对话已结束"
+                if reason == "idle_timeout"
+                else "服务端已结束本次对话"
+            )
+            if reason == "idle_timeout":
+                message = "\u957f\u65f6\u95f4\u672a\u5bf9\u8bdd\uff0c\u8fde\u63a5\u5df2\u65ad\u5f00"
+            # 必须在异步清理前同步设置，避免连接先关闭而误触发自动重连。
+            self._intentional_standby = True
+            self._standby_reason = reason
+            self._standby_message = message
+            self._session_end_pending = True
+            asyncio.create_task(self._handle_server_session_end(reason, message))
         elif t == "stt":
             if self._speech_start_time and data.get("text"):
                 asr_latency = time.time() - self._speech_start_time
@@ -737,6 +760,15 @@ class WebBridge:
             self._handle_function_call(data)
         else:
             print(f"[Bridge] 未知消息类型: {t}, keys={list(data.keys())}")
+
+    async def _handle_server_session_end(self, reason, message):
+        """\u5904\u7406\u670d\u52a1\u7aef\u7ed3\u675f\u4e8b\u4ef6\uff1b\u8bed\u97f3\u9000\u51fa\u5148\u64ad\u653e\u672c\u5730\u56fa\u5b9a\u53cd\u9988\uff0c\u518d\u590d\u7528\u5f85\u673a\u6d41\u7a0b\u3002"""
+        try:
+            if reason == "voice_exit":
+                await self._play_local_intent_feedback("dialog_exit", message)
+            await self._enter_standby(reason, message)
+        finally:
+            self._session_end_pending = False
 
     def _handle_mcp(self, data):
         """处理服务端 MCP JSON-RPC 2.0 消息: initialize / tools/list / tools/call"""
@@ -1212,13 +1244,27 @@ class WebBridge:
         except Exception as e:
             print(f"[Bridge] TTS播放异常: {e}")
 
-    def _on_xiaozhi_state(self, state):
+    def _on_xiaozhi_state(self, state, details=None):
         if state != "disconnected":
             asyncio.create_task(self._broadcast_json({"type": "state", "state": state}))
             return
         self._cancel_idle_timer()
         if self._intentional_standby:
+            if self._session_end_pending:
+                return
             asyncio.create_task(self._broadcast_json({"type": "state", "state": "disconnected"}))
+            return
+        details = details or {}
+        close_code = details.get("code")
+        close_reason = details.get("reason") or ""
+        if close_code in (1000, 1001):
+            # 服务端正常关闭代表本次会话结束，等待用户继续或通过唤醒词恢复。
+            self._intentional_standby = True
+            self._standby_reason = "server_closed"
+            self._standby_message = close_reason or "服务端已结束本次对话"
+            asyncio.create_task(self._enter_standby(
+                self._standby_reason, self._standby_message
+            ))
             return
         asyncio.create_task(self._broadcast_json({"type": "state", "state": "connecting"}))
         if not self._reconnect_task or self._reconnect_task.done():
@@ -1401,6 +1447,7 @@ class WebBridge:
             "volume_50":    "resp_volume_50.mp3",
             "volume_75":    "resp_volume_75.mp3",
             "volume_100":   "resp_volume_100.mp3",
+            "dialog_exit":  "resp_dialog_exit.mp3",
         }
         sr = AudioConfig.OUTPUT_SAMPLE_RATE
         for key, fname in files.items():
