@@ -27,7 +27,7 @@ const dialogHeader=function(){
   if(Runtime.state==='listening')right='<i class="ti ti-microphone micdot" aria-hidden="true"></i>';
   if(Runtime.state==='speaking')right='<div class="wvb" style="height:10px;width:4px"></div><div class="wvb" style="height:15px;width:4px;animation-delay:.2s"></div><div class="wvb" style="height:11px;width:4px;animation-delay:.4s"></div>';
   return '<div class="topbar"><span>'+timeText()+'</span><span>'+statusIcon(Runtime.state)+'</span></div>'+
-    '<div class="head">'+mascot(30,true)+'<span class="head-name">灵犀</span><div class="head-right">'+right+'</div></div>';
+    '<div class="head"><span class="head-mascot" onclick="goHome()" title="返回主屏">'+mascot(30,true)+'</span><span class="head-name">灵犀</span><div class="head-right">'+right+'</div></div>';
 };
 
 const LiveDialog=(function(){
@@ -98,7 +98,6 @@ const LiveDialog=(function(){
     $('btnSnd').innerHTML='<i class="ti ti-bell-ringing" aria-hidden="true"></i> 唤醒词'+(Runtime.wakeWordEnabled?'开':'关');
     $('voiceSel').classList.add('hidden');
     $('controls').classList.add('hidden');
-    $('cap').textContent=Runtime.errorMessage||({connecting:'连接恢复中…',disconnected:'点击“继续对话”重新开始',idle:'正在准备聆听…',listening:'正在聆听…',thinking:'正在思考…',speaking:'正在播报，可随时打断'}[Runtime.state]||'');
   }
 
   function updateUser(data){

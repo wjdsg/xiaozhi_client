@@ -24,6 +24,7 @@ from aiohttp import web, WSMsgType
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.utils.opus_loader import setup_opus
 from src.utils.config_manager import ConfigManager
+from src.utils.page_inject import render_index_html
 from src.constants.constants import DeviceState, AudioConfig
 
 setup_opus()  # 先加载opus.dll, 再导入依赖opuslib的模块
@@ -466,8 +467,7 @@ class WebBridge:
 
     # ========== HTTP ==========
     async def _handle_index(self, request):
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
-        return web.FileResponse(path)
+        return web.Response(text=render_index_html(), content_type="text/html")
 
     # ========== 浏览器 WebSocket ==========
     async def _handle_browser_ws(self, request):

@@ -69,14 +69,18 @@
     "ENERGY_COOLDOWN_MS": 1000
   },
   "AUDIO_DEVICES": {
-    "input_device_id": 12,
-    "input_device_name": "麦克风阵列 (英特尔® 智音技术)",
-    "output_device_id": 10,
-    "output_device_name": "扬声器 (Realtek(R) Audio)",
+    "input_device_id": 15,
+    "input_device_name": "麦克风阵列 (3- Senary Audio)",
+    "output_device_id": 12,
+    "output_device_name": "扬声器 (3- Senary Audio)",
     "input_sample_rate": 48000,
     "output_sample_rate": 48000,
     "input_channels": 2,
     "output_channels": 2,
-    "output_volume": 100
+    "output_volume": 75
+  },
+  "EXTERNAL_LINKS": {
+    "FINGER_LOOKUP_URL": "http://127.0.0.1:5002/",
+    "HOMEWORK_REVIEW_URL": "http://127.0.0.1:5003/"
   }
 }
