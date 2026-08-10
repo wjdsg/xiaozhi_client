@@ -22,16 +22,15 @@
 :root{--ink:#20364e;--sub:#7892ab;--tertiary:#a7b9ca;--line:#dbe8f4;--blue:#2B9BF4;--blue-dark:#1c74d4;--soft:#eef5ff;--green:#20a866;--orange:#f2a200;--red:#e95555;--purple:#706df5;--bg1:#f7fbff;--bg2:#e8f1fa}
 *{box-sizing:border-box}
 body{margin:0;background:linear-gradient(180deg,var(--bg1),var(--bg2));font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Arial,sans-serif;color:var(--ink)}
-.demo{min-height:100vh;padding:22px 16px 34px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.demo{min-height:100vh;padding:24px 16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 .nav-row{width:320px;display:flex;align-items:center;gap:10px;min-height:32px}
 .back-btn{border:0;border-radius:999px;background:#fff;color:var(--blue);min-width:112px;height:38px;font-size:13px;font-weight:800;padding:0 16px;box-shadow:0 7px 18px rgba(60,110,160,.14);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px}
 .hidden{display:none!important}
 .fade{animation:fadein .4s ease}
 .wvb{width:5px;border-radius:2px;background:#1e88e5;transform-origin:center;animation:wv 1s infinite ease-in-out}
-#dots{display:flex;gap:6px}
+#dots{display:flex;gap:6px;position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:10}
 #dots span{width:8px;height:8px;border-radius:50%;background:var(--line);display:inline-block;cursor:pointer}
 #dots span.on{background:var(--blue)}
-.caption{font-size:13px;color:var(--sub);text-align:center;max-width:420px;min-height:20px}
 .controls{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
 button{border:0;border-radius:999px;padding:8px 14px;background:#e8f1fa;color:#365b7d;font-weight:700;font-size:13px;cursor:pointer}
 button.primary-btn{background:var(--blue);color:#fff}
@@ -55,6 +54,9 @@ select{border-radius:999px;border:1px solid var(--line);padding:6px 10px;font-si
 .screen-page{height:100%;display:flex;flex-direction:column;gap:10px}
 .topbar{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#7fa3c6}
 .head{display:flex;align-items:center;gap:8px}
+.head-mascot{display:flex;align-items:center;cursor:pointer;border-radius:50%;transition:opacity .15s ease,transform .15s ease}
+.head-mascot:hover{opacity:.85;transform:scale(1.06)}
+.head-mascot:active{transform:scale(.94)}
 .head-name{font-size:13px;color:#1b4b7a;font-weight:600}
 .head-right{margin-left:auto;display:flex;gap:3px;align-items:center;color:#7fa3c6}
 .card{background:rgba(255,255,255,.82);border:1px solid rgba(183,216,239,.7);border-radius:22px;padding:14px;display:flex;flex-direction:column;gap:9px;box-shadow:0 10px 28px rgba(70,117,170,.08)}
@@ -347,7 +349,6 @@ select{border-radius:999px;border:1px solid var(--line);padding:6px 10px;font-si
       <button id="backBtn" class="back-btn hidden" onclick="goHome()"><i class="ti ti-arrow-left" aria-hidden="true"></i>返回主屏</button>
     </div>
   </div>
-  <div id="cap" class="caption">点一点应用图标,看看每个功能怎么运作</div>
   <div id="dots"></div>
   <div id="controls" class="controls hidden">
     <button id="btnPlay" class="primary-btn"><i class="ti ti-player-pause" aria-hidden="true"></i> 暂停</button>
@@ -358,6 +359,8 @@ select{border-radius:999px;border:1px solid var(--line);padding:6px 10px;font-si
 </div>
 
 <script>
+// 服务端(preview.py/bridge.py)启动时会将下方占位符替换为 config/config.json 中的真实链接
+const EXT_LINKS={finger:"__FINGER_LOOKUP_URL__",homework:"__HOMEWORK_REVIEW_URL__"};
 function mascot(s,still){
   return '<svg class="mascot" width="'+s+'" height="'+s+'" viewBox="0 0 100 100" style="'+(still?'animation:none':'')+'" aria-hidden="true">'
   +'<path d="M50 24 Q52 18 50 13" stroke="#1E88E5" stroke-width="3" fill="none" stroke-linecap="round"/>'
@@ -492,7 +495,7 @@ const Dialog=(function(){
   ];
   let cur=0,timer=null,tok=0,playing=true;
   function renderDots(){$('dots').innerHTML=scenes.map((s,i)=>'<span class="'+(i===cur?"on":"")+'" data-i="'+i+'"></span>').join('');Array.prototype.forEach.call($('dots').children,function(d,i){d.onclick=function(){go(i);};});}
-  function go(i){tok++;const my=tok;clearTimeout(timer);clearInterval(typer);Voice.cancel();cur=i;const s=scenes[i];$('lamp').innerHTML=s.html;$('cap').textContent=s.cap;renderDots();if(s.after)s.after();
+  function go(i){tok++;const my=tok;clearTimeout(timer);clearInterval(typer);Voice.cancel();cur=i;const s=scenes[i];$('lamp').innerHTML=s.html;renderDots();if(s.after)s.after();
     const adv=function(){if(my===tok&&playing)go((cur+1)%scenes.length);};
     if(Voice.on&&s.speak){let fin=false;Voice.speak(s.speak,function(){if(fin)return;fin=true;timer=setTimeout(adv,700);});timer=setTimeout(function(){if(!fin){fin=true;adv();}},s.dur+15000);}
     else{timer=setTimeout(adv,s.dur);}}
@@ -529,7 +532,7 @@ const Lookup=(function(){
   ];
   let cur=0,timer=null,tok=0,playing=true;
   function renderDots(){$('dots').innerHTML=scenes.map((s,i)=>'<span class="'+(i===cur?"on":"")+'" data-i="'+i+'"></span>').join('');Array.prototype.forEach.call($('dots').children,function(d,i){d.onclick=function(){go(i);};});}
-  function go(i){tok++;const my=tok;clearTimeout(timer);Voice.cancel();cur=i;const s=scenes[i];$('lamp').innerHTML=s.html;$('cap').textContent=s.cap;renderDots();
+  function go(i){tok++;const my=tok;clearTimeout(timer);Voice.cancel();cur=i;const s=scenes[i];$('lamp').innerHTML=s.html;renderDots();
     const adv=function(){if(my===tok&&playing)go((cur+1)%scenes.length);};
     if(Voice.on&&s.speak){let fin=false;Voice.speak(s.speak,function(){if(fin)return;fin=true;timer=setTimeout(adv,700);});timer=setTimeout(function(){if(!fin){fin=true;adv();}},s.dur+15000);}
     else{timer=setTimeout(adv,s.dur);}}
@@ -597,7 +600,7 @@ const Homework=(function(){
   ];
   let cur=0,timer=null,playing=true;
   function renderDots(){$('dots').innerHTML=scenes.map((s,i)=>'<span class="'+(i===cur?"on":"")+'" data-i="'+i+'"></span>').join('');Array.prototype.forEach.call($('dots').children,function(d,i){d.onclick=function(){go(i);};});}
-  function go(i){clearTimeout(timer);cur=i;const s=scenes[i];$('lamp').innerHTML=s.lamp||'';$('phone').innerHTML=s.phone||'';$('lampPanel').classList.toggle('hidden',s.showLamp===false);$('phonePanel').classList.toggle('hidden',s.showPhone===false);$('cap').textContent=s.cap;renderDots();if(playing)timer=setTimeout(function(){go((cur+1)%scenes.length);},s.dur);}
+  function go(i){clearTimeout(timer);cur=i;const s=scenes[i];$('lamp').innerHTML=s.lamp||'';$('phone').innerHTML=s.phone||'';$('lampPanel').classList.toggle('hidden',s.showLamp===false);$('phonePanel').classList.toggle('hidden',s.showPhone===false);renderDots();if(playing)timer=setTimeout(function(){go((cur+1)%scenes.length);},s.dur);}
   return{
     start:function(){cur=0;playing=true;$('phonePanel').classList.remove('hidden');go(0);},
     stop:function(){clearTimeout(timer);Voice.cancel();},
@@ -642,15 +645,22 @@ const Lamp=(function(){
       if(b)b.className='sim-step'+(level===i?' on':'');
     });
   }
+  function syncUrl(){
+    const p=new URLSearchParams(location.search);
+    p.set('lamp',level);
+    history.replaceState(null,'','?'+p.toString());
+  }
   return{
     init:function(){const el=document.getElementById('simLamp');if(el)el.innerHTML=svg();render();},
-    setLevel:function(v){level=Math.max(0,Math.min(3,v));render();},
+    setLevel:function(v){level=Math.max(0,Math.min(3,v));render();syncUrl();},
+    getLevel:function(){return level;},
     say:function(cmd){
       if(cmd==='开灯')level=level>0?level:2;
       else if(cmd==='关灯')level=0;
       else if(cmd==='亮一点')level=Math.min(3,level+1);
       else if(cmd==='暗一点')level=Math.max(0,level-1);
       render();
+      syncUrl();
     }
   };
 })();
@@ -659,6 +669,16 @@ const modules={dialog:Dialog,lookup:Lookup,homework:Homework};
 let currentApp='home';
 
 function homeTile(iconHtml,cls,label,sub,badge,onclick){return '<div class="home-tile '+cls+(onclick?'':' muted')+'"'+(onclick?' onclick="'+onclick+'"':'')+'>'+(badge?'<span class="home-badge">'+badge+'</span>':'')+'<div class="htico">'+iconHtml+'</div><div><div class="htlabel">'+label+'</div><div class="htsub">'+sub+'</div></div></div>';}
+function jumpTo(key){
+  const url=(EXT_LINKS&&EXT_LINKS[key])||'';
+  if(!url||url.indexOf('__')===0){
+    // 未配置链接: 回退到本地演示
+    openApp(key==='finger'?'lookup':'homework');
+    return;
+  }
+  const sep=url.indexOf('?')>=0?'&':'?';
+  window.location.href=url+sep+'lamp='+Lamp.getLevel();
+}
 function homeScreen(){
   return '<div class="home-bgwrap"><div class="home-blob hb1"></div><div class="home-blob hb2"></div><div class="home-blob hb3"></div></div>'
   +'<div class="home-page">'
@@ -667,8 +687,8 @@ function homeScreen(){
   +'<div class="home-greetline">每弄懂一道题,<b>你就厉害了一点点</b></div>'
   +'<div class="home-grid">'
   +homeTile(mascot(30,true),'home-blue','学伴对话','有问题问我',"","Runtime.openDialog('manual')")
-  +homeTile(iconLookup(),'home-green','指尖查词','点一点就查',"","openApp('lookup')")
-  +homeTile(iconHomework(),'home-amber','作业批改','拍照交作业','',"openApp('homework')")
+  +homeTile(iconLookup(),'home-green','指尖查词','点一点就查',"","jumpTo('finger')")
+  +homeTile(iconHomework(),'home-amber','作业批改','拍照交作业','',"jumpTo('homework')")
   +homeTile(iconSettings(),'home-gray','设置','灯光与家长',"","")
   +'</div>'
   +'<div class="home-bar"><div class="home-bar-avatar">'+mascot(26,true)+'</div><div class="home-bar-text">说「你好灵犀」随时叫我</div><div class="home-wave"><i style="height:7px;animation-delay:0s"></i><i style="height:12px;animation-delay:.15s"></i><i style="height:9px;animation-delay:.3s"></i><i style="height:13px;animation-delay:.45s"></i></div></div>'
@@ -681,7 +701,6 @@ function showHome(){
   $('phonePanel').classList.add('hidden');
   $('lamp').innerHTML=homeScreen();
   $('backBtn').classList.add('hidden');
-  $('cap').textContent='点一点应用图标,看看每个功能怎么运作';
   $('dots').innerHTML='';
   $('controls').classList.add('hidden');
 }
@@ -698,6 +717,9 @@ $('btnPlay').onclick=function(){if(currentApp==='home')return;const p=modules[cu
 $('btnRe').onclick=function(){if(currentApp==='home')return;modules[currentApp].replay();$('btnPlay').innerHTML='<i class="ti ti-player-pause" aria-hidden="true"></i> 暂停';};
 $('btnSnd').onclick=function(){Voice.on=!Voice.on;this.innerHTML=Voice.on?'<i class="ti ti-volume" aria-hidden="true"></i> 关闭语音':'<i class="ti ti-volume" aria-hidden="true"></i> 开启语音';if(currentApp!=='home')modules[currentApp].refresh();};
 Lamp.init();
+// 从 URL 回读 lamp 参数, 实现从外部页面跳回时灯光状态延续
+const lampMatch=location.search.match(/[?&]lamp=(\d+)/);
+if(lampMatch)Lamp.setLevel(parseInt(lampMatch[1],10)||0);
 showHome();
 </script>
 <script src="/assets/runtime.js"></script>
