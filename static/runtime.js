@@ -25,7 +25,7 @@ const statusIcon=function(state){
 const dialogHeader=function(){
   let right='<i class="ti ti-microphone-off micoff" aria-hidden="true"></i>';
   if(Runtime.state==='listening')right='<i class="ti ti-microphone micdot" aria-hidden="true"></i>';
-  if(Runtime.state==='speaking')right='<div class="wvb" style="height:10px;width:4px"></div><div class="wvb" style="height:15px;width:4px;animation-delay:.2s"></div><div class="wvb" style="height:11px;width:4px;animation-delay:.4s"></div>';
+  if(Runtime.state==='thinking'||Runtime.state==='speaking')right='<div class="wvb" style="height:10px;width:4px"></div><div class="wvb" style="height:15px;width:4px;animation-delay:.2s"></div><div class="wvb" style="height:11px;width:4px;animation-delay:.4s"></div>';
   return '<div class="topbar"><span>'+timeText()+'</span><span>'+statusIcon(Runtime.state)+'</span></div>'+
     '<div class="head"><span class="head-mascot" onclick="goHome()" title="返回主屏">'+mascot(30,true)+'</span><span class="head-name">灵犀</span><div class="head-right">'+right+'</div></div>';
 };
@@ -50,7 +50,7 @@ const LiveDialog=(function(){
   function centerHtml(){
     if(Runtime.state==='listening'){
       const waves=[12,20,16,22,13].map(function(h,i){return '<div class="wvb" style="height:'+h+'px;animation-delay:'+(i*.15)+'s"></div>';}).join('');
-      return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div><div class="runtime-wait-cursor" aria-hidden="true"></div></div><div class="glowbar"></div>';
+      return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div>'+activityHtml('listening','正在聆听…')+'</div>';
     }
     if(Runtime.state==='connecting')return '<div class="runtime-center fade">'+mascot(100)+'<div class="runtime-title">正在连接</div><div class="runtime-sub">正在准备语音服务…</div></div>';
     if(Runtime.state==='disconnected'){
@@ -60,7 +60,12 @@ const LiveDialog=(function(){
       return '<div class="runtime-center fade">'+mascot(100,true)+'<div class="runtime-title">'+title+'</div><div class="runtime-sub">'+escapeHtml(subtitle)+'</div></div>';
     }
     const waves=[12,20,16,22,13].map(function(h,i){return '<div class="wvb" style="height:'+h+'px;animation-delay:'+(i*.15)+'s"></div>';}).join('');
-    return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div><div class="runtime-wait-cursor" aria-hidden="true"></div></div><div class="glowbar"></div>';
+    return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div><div class="runtime-wait-cursor" aria-hidden="true"></div></div>';
+  }
+
+  function activityHtml(kind,text){
+    if(kind==='listening')return '<div class="runtime-activity listening"><span class="runtime-activity-dot"></span><span>'+text+'</span></div>';
+    return '<div class="runtime-activity responding"><span class="runtime-activity-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span>'+text+'</span></div>';
   }
 
 
@@ -79,7 +84,9 @@ const LiveDialog=(function(){
     if((Runtime.state==='listening'&&!messages.length)||(!messages.length&&Runtime.state!=='thinking'&&Runtime.state!=='speaking')){
       body=centerHtml();
     }else{
-      body='<div id="runtimeChat" class="runtime-chat fade">'+chatHtml()+(Runtime.state==='thinking'?'<div class="runtime-thinking"><i></i><i></i><i></i></div>':'')+'</div>'+(Runtime.state==='speaking'?'<div class="glowbar"></div>':'');
+      const responding=Runtime.state==='thinking'||Runtime.state==='speaking';
+      const activity=Runtime.state==='listening'?activityHtml('listening','正在聆听…'):responding?activityHtml('responding','正在回答…'):'';
+      body='<div id="runtimeChat" class="runtime-chat fade">'+chatHtml()+'</div>'+activity+(responding?'<div class="glowbar"></div>':'');
     }
     const actions=dialogActionsHtml();
     $('lamp').innerHTML='<div class="screen-page runtime-dialog-page">'+dialogHeader()+body+actions+'</div>';
