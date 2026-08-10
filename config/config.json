@@ -77,6 +77,6 @@
     "output_sample_rate": 48000,
     "input_channels": 2,
     "output_channels": 2,
-    "output_volume": 100
+    "output_volume": 50
   }
 }
