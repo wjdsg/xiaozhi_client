@@ -205,7 +205,7 @@ const Settings=(function(){
       '<div class="head">'+mascot(30,true)+'<span class="head-name">设置</span><div class="head-right">设备与提醒</div></div>'+
       '<div class="card fade">'+
         '<div class="runtime-setting-row"><div><strong>\u8bed\u97f3\u5524\u9192</strong><div class="runtime-sub">\u8bf4\u201c\u4f60\u597d\u7075\u7280\u201d\u5f00\u59cb\u5bf9\u8bdd</div></div><button id="runtimeWakeToggle" class="runtime-chip '+(Runtime.wakeWordPending?'pending':Runtime.wakeWordEnabled?'on':'')+'" onclick="Runtime.toggleWakeWord()" '+(Runtime.wakeWordPending?'disabled':'')+'>'+(Runtime.wakeWordPending?(Runtime.wakeWordPendingTarget?'\u6b63\u5728\u5f00\u542f\u2026':'\u6b63\u5728\u5173\u95ed\u2026'):(Runtime.wakeWordEnabled?'\u5df2\u5f00\u542f':'\u5df2\u5173\u95ed'))+'</button></div>'+
-        '<div class="runtime-setting-row"><div><strong>实时识别字幕</strong><div class="runtime-sub">'+escapeHtml(Runtime.streamingAsrLabel())+'</div></div><button class="runtime-chip '+(Runtime.streamingAsrEnabled?'on':'')+'" onclick="Runtime.toggleStreamingAsr()">'+(Runtime.streamingAsrEnabled?'已接受':'不接受')+'</button></div>'+
+        '<div class="runtime-setting-row"><div><strong>实时识别字幕</strong><div class="runtime-sub">'+escapeHtml(Runtime.streamingAsrLabel())+'</div></div><button class="runtime-chip '+(Runtime.streamingAsrEnabled?'on':'')+'" onclick="Runtime.toggleStreamingAsr()">'+(Runtime.streamingAsrEnabled?'已开启':'未开启')+'</button></div>'+
         '<div class="runtime-setting-row"><div><strong>服务状态</strong><div class="runtime-sub" id="runtimeServiceText">'+escapeHtml(Runtime.stateLabel())+'</div></div><button class="runtime-chip" onclick="Runtime.reconnect()">重新连接</button></div>'+
       '</div>'+
       '<div class="card fade"><div><strong style="font-size:14px">倒计时</strong><div class="runtime-sub">输入分钟数，最多 999 分钟</div></div><div class="runtime-timer-form"><input id="runtimeTimerInput" type="number" min="1" max="999" inputmode="numeric" placeholder="分钟"><button class="primary-btn" onclick="Runtime.setTimerFromInput()">开始</button></div><div id="runtimeTimerSlot"></div></div>'+
@@ -251,10 +251,10 @@ const Runtime={
   },
 
   streamingAsrLabel:function(){
-    if(!this.streamingAsrEnabled)return '仅在识别完成后显示整句';
+    if(!this.streamingAsrEnabled)return '识别完成后显示整句字幕';
     return this.streamingAsrServerAvailable
       ?'说话时实时显示识别文字'
-      :'已允许；当前服务按完整句返回';
+      :'已开启；当前服务按完整句返回';
   },
 
   connect:function(){
