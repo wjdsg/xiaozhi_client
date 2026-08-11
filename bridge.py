@@ -219,6 +219,12 @@ class WebBridge:
         self._skip_tts = False        # 已用本地音频响应, 丢弃服务端TTS
         self._local_intent_feedback_active = False
         self._subtitle_turn_id = 0
+        self._active_stt_turn_id = None
+        config_manager = ConfigManager.get_instance()
+        self._accept_streaming_asr = bool(config_manager.get_config(
+            "UI_OPTIONS.ACCEPT_STREAMING_ASR_SUBTITLE", True
+        ))
+        self._server_streaming_asr_available = False
         self._last_send_time = 0.0
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
         self._pre_listen_opus = deque(maxlen=50)  # 打断前缓存的 Opus 帧(约1秒)
@@ -380,8 +386,7 @@ class WebBridge:
 
         self._keep_listening = True
         await self._play_wake_response()
-        await self.xiaozhi.send_text(json.dumps(
-            {"type": "listen", "state": "start", "mode": "auto"}))
+        await self._send_listen_start()
         await self._set_state(DeviceState.LISTENING)
 
     async def _on_speech_end(self):
@@ -409,8 +414,7 @@ class WebBridge:
         if self.codec:
             await self.codec.clear_audio_queue()
         self._keep_listening = True
-        await self.xiaozhi.send_text(json.dumps(
-            {"type": "listen", "state": "start", "mode": "auto"}))
+        await self._send_listen_start()
         # flush 打断前缓存的 Opus 帧, 确保开头语音不丢失
         buf = list(self._pre_listen_opus)
         self._pre_listen_opus.clear()
@@ -475,6 +479,11 @@ class WebBridge:
         await ws.prepare(request)
         self.browser_ws_set.add(ws)
         print(f"[Bridge] 浏览器连接 (共{len(self.browser_ws_set)})")
+        await ws.send_json({
+            "type": "asr_streaming_setting",
+            "enabled": self._accept_streaming_asr,
+            "server_available": self._server_streaming_asr_available,
+        })
 
         # 发送当前状态, 如果xiaozhi断连则自动重连
         if self.xiaozhi and self.xiaozhi.connected:
@@ -545,8 +554,7 @@ class WebBridge:
                 return
             self._keep_listening = True
             self._speech_start_time = 0.0  # 重置, 等首帧音频触发
-            await self.xiaozhi.send_text(json.dumps(
-                {"type": "listen", "state": "start", "mode": "auto"}))
+            await self._send_listen_start()
             await self._set_state(DeviceState.LISTENING)
             print("[Bridge] 已发送listen start + 状态→listening")
         elif t == "stop_listening":
@@ -560,15 +568,26 @@ class WebBridge:
             if self.codec:
                 await self.codec.clear_audio_queue()
             if self.xiaozhi and self.xiaozhi.connected:
-                await self.xiaozhi.send_text(json.dumps(
-                    {"type": "listen", "state": "start", "mode": "auto"}
-                ))
+                await self._send_listen_start()
                 await self._set_state(DeviceState.LISTENING)
             else:
                 await self._set_state("disconnected")
         elif t == "toggle_wake_word":
             enabled = await self.toggle_wake_word()
             await self._broadcast_json({"type": "wake_word", "enabled": enabled})
+        elif t == "set_streaming_asr":
+            enabled = bool(data.get("enabled", True))
+            saved = ConfigManager.get_instance().update_config(
+                "UI_OPTIONS.ACCEPT_STREAMING_ASR_SUBTITLE", enabled
+            )
+            if saved:
+                self._accept_streaming_asr = enabled
+            await self._broadcast_json({
+                "type": "asr_streaming_setting",
+                "enabled": self._accept_streaming_asr,
+                "server_available": self._server_streaming_asr_available,
+                "saved": saved,
+            })
         elif t == "set_timer":
             mins = float(data.get("minutes", 5))
             label = data.get("label", "")
@@ -630,6 +649,18 @@ class WebBridge:
             )
 
     # ========== 麦克风 → xiaozhi ==========
+    async def _send_listen_start(self):
+        """开始一轮拾音，并声明客户端是否接受 ASR 中间字幕。"""
+        if not self.xiaozhi or not self.xiaozhi.connected:
+            return False
+        await self.xiaozhi.send_text(json.dumps({
+            "type": "listen",
+            "state": "start",
+            "mode": "auto",
+            "accept_partial_stt": self._accept_streaming_asr,
+        }))
+        return True
+
     def _on_mic_opus(self, opus_data):
         """AudioCodec回调(音频线程): 麦克风采集→Opus编码→发送到xiaozhi
         对齐 py-xiaozhi AudioPlugin._on_encoded_audio (audio.py:193)
@@ -665,16 +696,19 @@ class WebBridge:
 
     async def _forward_stt_to_browser(self, data, turn_id):
         """保证ASR字幕先于思考状态到达浏览器。"""
+        is_final = data.get("final", True) is not False
         await self._broadcast_json({
             "type": "stt",
             "text": data.get("text", ""),
             "session_id": data.get("session_id", ""),
             "turn_id": turn_id,
-            "final": True,
+            "final": is_final,
         })
-        await self._broadcast_json({
-            "type": "state", "state": "thinking", "turn_id": turn_id,
-        })
+        if is_final:
+            await self._broadcast_json({
+                "type": "state", "state": "thinking", "turn_id": turn_id,
+            })
+
     def _on_xiaozhi_json(self, data):
         t = data.get("type", "")
         if t == "asr_wakeup_response":
@@ -694,15 +728,36 @@ class WebBridge:
             self._standby_message = message
             self._session_end_pending = True
             asyncio.create_task(self._handle_server_session_end(reason, message))
+        elif t == "asr_capability":
+            self._server_streaming_asr_available = bool(
+                data.get("streaming_subtitle", False)
+            )
+            asyncio.create_task(self._broadcast_json({
+                "type": "asr_streaming_setting",
+                "enabled": self._accept_streaming_asr,
+                "server_available": self._server_streaming_asr_available,
+            }))
         elif t == "stt":
-            if self._speech_start_time and data.get("text"):
+            is_final = data.get("final", True) is not False
+            if not is_final and not self._accept_streaming_asr:
+                return
+            if is_final and self._speech_start_time and data.get("text"):
                 asr_latency = time.time() - self._speech_start_time
                 msg = f"首音→STT返回: {asr_latency:.2f}s text={data.get('text','')[:30]}"
                 print(f"[Log] {msg}")
                 self._log(msg)
-            self._subtitle_turn_id += 1
+            server_turn_id = data.get("turn_id")
+            if server_turn_id is not None:
+                turn_id = server_turn_id
+            elif not is_final and self._active_stt_turn_id is not None:
+                turn_id = self._active_stt_turn_id
+            else:
+                self._subtitle_turn_id += 1
+                turn_id = self._subtitle_turn_id
+            self._active_stt_turn_id = None if is_final else turn_id
+            self._subtitle_turn_id = turn_id
             asyncio.create_task(
-                self._forward_stt_to_browser(data, self._subtitle_turn_id)
+                self._forward_stt_to_browser(data, turn_id)
             )
         elif t == "llm":
             asyncio.create_task(self._broadcast_json({
@@ -1279,8 +1334,7 @@ class WebBridge:
             await asyncio.sleep(0.15)
         if self._keep_listening and self.xiaozhi and self.xiaozhi.connected:
             await self.codec.clear_audio_queue()
-            await self.xiaozhi.send_text(json.dumps(
-                {"type": "listen", "state": "start", "mode": "auto"}))
+            await self._send_listen_start()
             await self._set_state(DeviceState.LISTENING)
 
     async def _try_reconnect(self):
@@ -1295,9 +1349,7 @@ class WebBridge:
                     return
                 if await self.connect_xiaozhi(report_errors=False):
                     if resume_listening and self._keep_listening and not self._intentional_standby:
-                        await self.xiaozhi.send_text(json.dumps(
-                            {"type": "listen", "state": "start", "mode": "auto"}
-                        ))
+                        await self._send_listen_start()
                         await self._set_state(DeviceState.LISTENING)
                     return
             await self._enter_standby(

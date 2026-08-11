@@ -43,7 +43,8 @@ const LiveDialog=(function(){
 
   function chatHtml(){
     return messages.map(function(item){
-      return '<div class="'+(item.role==='user'?'qb':'ab')+'">'+escapeHtml(item.text)+'</div>';
+      const partial=item.role==='user'&&item.final===false?' partial':'';
+      return '<div class="'+(item.role==='user'?'qb':'ab')+partial+'" data-turn-id="'+escapeHtml(item.turnId||'')+'">'+escapeHtml(item.text)+'</div>';
     }).join('');
   }
 
@@ -110,11 +111,22 @@ const LiveDialog=(function(){
   function updateUser(data){
     const text=typeof data==='string'?data:(data&&data.text)||'';
     if(!text)return;
+    const isFinal=!(data&&data.final===false);
     const turnId=data&&data.turn_id!=null?'user-'+String(data.turn_id):'user-local-'+(++messageSequence);
     lastUserText=text;
     const last=messages[messages.length-1];
-    if(last&&last.role==='user'&&last.turnId===turnId)last.text=text;
-    else messages.push({role:'user',text:text,turnId:turnId});
+    if(last&&last.role==='user'&&last.turnId===turnId){
+      last.text=text;
+      last.final=isFinal;
+      const chat=$('runtimeChat');
+      const bubble=chat&&chat.lastElementChild;
+      if(bubble&&bubble.classList.contains('qb')&&bubble.dataset.turnId===turnId){
+        bubble.textContent=text;
+        bubble.classList.toggle('partial',!isFinal);
+        chat.scrollTop=chat.scrollHeight;
+        return;
+      }
+    }else messages.push({role:'user',text:text,turnId:turnId,final:isFinal});
     render();
   }
 
@@ -193,6 +205,7 @@ const Settings=(function(){
       '<div class="head">'+mascot(30,true)+'<span class="head-name">设置</span><div class="head-right">设备与提醒</div></div>'+
       '<div class="card fade">'+
         '<div class="runtime-setting-row"><div><strong>\u8bed\u97f3\u5524\u9192</strong><div class="runtime-sub">\u8bf4\u201c\u4f60\u597d\u7075\u7280\u201d\u5f00\u59cb\u5bf9\u8bdd</div></div><button id="runtimeWakeToggle" class="runtime-chip '+(Runtime.wakeWordPending?'pending':Runtime.wakeWordEnabled?'on':'')+'" onclick="Runtime.toggleWakeWord()" '+(Runtime.wakeWordPending?'disabled':'')+'>'+(Runtime.wakeWordPending?(Runtime.wakeWordPendingTarget?'\u6b63\u5728\u5f00\u542f\u2026':'\u6b63\u5728\u5173\u95ed\u2026'):(Runtime.wakeWordEnabled?'\u5df2\u5f00\u542f':'\u5df2\u5173\u95ed'))+'</button></div>'+
+        '<div class="runtime-setting-row"><div><strong>实时识别字幕</strong><div class="runtime-sub">'+escapeHtml(Runtime.streamingAsrLabel())+'</div></div><button class="runtime-chip '+(Runtime.streamingAsrEnabled?'on':'')+'" onclick="Runtime.toggleStreamingAsr()">'+(Runtime.streamingAsrEnabled?'已接受':'不接受')+'</button></div>'+
         '<div class="runtime-setting-row"><div><strong>服务状态</strong><div class="runtime-sub" id="runtimeServiceText">'+escapeHtml(Runtime.stateLabel())+'</div></div><button class="runtime-chip" onclick="Runtime.reconnect()">重新连接</button></div>'+
       '</div>'+
       '<div class="card fade"><div><strong style="font-size:14px">倒计时</strong><div class="runtime-sub">输入分钟数，最多 999 分钟</div></div><div class="runtime-timer-form"><input id="runtimeTimerInput" type="number" min="1" max="999" inputmode="numeric" placeholder="分钟"><button class="primary-btn" onclick="Runtime.setTimerFromInput()">开始</button></div><div id="runtimeTimerSlot"></div></div>'+
@@ -222,6 +235,8 @@ const Runtime={
   timerLabel:'',
   pendingDialogStart:false,
   sessionEndReason:'',
+  streamingAsrEnabled:true,
+  streamingAsrServerAvailable:false,
 
   init:function(){
     const self=this;
@@ -233,6 +248,13 @@ const Runtime={
 
   stateLabel:function(){
     return {connecting:'正在连接',disconnected:'已断开',idle:'在线',listening:'正在聆听',thinking:'正在思考',speaking:'正在播报'}[this.state]||this.state;
+  },
+
+  streamingAsrLabel:function(){
+    if(!this.streamingAsrEnabled)return '仅在识别完成后显示整句';
+    return this.streamingAsrServerAvailable
+      ?'说话时实时显示识别文字'
+      :'已允许；当前服务按完整句返回';
   },
 
   connect:function(){
@@ -348,6 +370,19 @@ const Runtime={
     },10000);
     return true;
   },
+
+  toggleStreamingAsr:function(){
+    const target=!this.streamingAsrEnabled;
+    if(!this.send({type:'set_streaming_asr',enabled:target})){
+      this.errorMessage='请先连接本地台灯服务';
+      Settings.render();
+      return false;
+    }
+    this.streamingAsrEnabled=target;
+    Settings.render();
+    return true;
+  },
+
   handleMessage:function(data){
     switch(data.type){
       case 'session_end':
@@ -364,7 +399,10 @@ const Runtime={
         this.setState(data.state);
         if(data.state==='idle'&&this.pendingDialogStart)this.startDialogListening();
         break;
-      case 'stt':if(data.text)LiveDialog.onSTT(data);break;
+      case 'stt':
+        if(data.final===false&&!this.streamingAsrEnabled)break;
+        if(data.text)LiveDialog.onSTT(data);
+        break;
       case 'llm':break;
       case 'tts':LiveDialog.onTTS(data);break;
       case 'error':
@@ -393,6 +431,14 @@ const Runtime={
         else if(requested!==null)this.errorMessage="";
         this.updateHomeIndicators();
         LiveDialog.render();
+        if(currentApp==='settings')Settings.render();
+        break;
+      case 'asr_streaming_setting':
+        this.streamingAsrEnabled=data.enabled!==false;
+        if(Object.prototype.hasOwnProperty.call(data,'server_available')){
+          this.streamingAsrServerAvailable=!!data.server_available;
+        }
+        if(data.saved===false)this.errorMessage='实时字幕设置保存失败';
         if(currentApp==='settings')Settings.render();
         break;
       case 'timer_start':this.startTimerDisplay(data.seconds,data.label);break;

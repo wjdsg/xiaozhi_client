@@ -65,6 +65,11 @@ class ConfigManager:
             "FILTER_LENGTH_RATIO": 0.4,
             "ENABLE_PREPROCESS": True,
         },
+        "UI_OPTIONS": {
+            # 客户端默认允许显示服务端推送的 ASR 中间字幕。
+            # 服务端未开启或 ASR 不支持中间结果时，仍按原来的整句字幕工作。
+            "ACCEPT_STREAMING_ASR_SUBTITLE": True,
+        },
         "AUDIO_DEVICES": {
             "input_device_id": None,
             "input_device_name": None,

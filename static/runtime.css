@@ -6,6 +6,9 @@
 .runtime-sub{font-size:12.5px;line-height:1.55;color:#7892ab}
 .runtime-chat{flex:1;display:flex;flex-direction:column;gap:8px;margin-top:12px;overflow-y:auto;padding:2px 1px 10px;scrollbar-width:none}
 .runtime-chat::-webkit-scrollbar{display:none}
+.runtime-chat .qb.partial{opacity:.78}
+.runtime-chat .qb.partial::after{content:'';display:inline-block;width:2px;height:1em;margin-left:4px;vertical-align:-.12em;border-radius:2px;background:rgba(255,255,255,.92);animation:runtimePartialCursor .85s steps(2,end) infinite}
+@keyframes runtimePartialCursor{0%,48%{opacity:1}49%,100%{opacity:.18}}
 .runtime-thinking{align-self:flex-start;display:flex;gap:5px;background:#dcedfd;border-radius:16px 16px 16px 3px;padding:12px 15px}
 .runtime-thinking i{width:7px;height:7px;border-radius:50%;background:var(--blue);animation:dot 1.15s infinite}
 .runtime-thinking i:nth-child(2){animation-delay:.18s}
