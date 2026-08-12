@@ -251,10 +251,10 @@ const Runtime={
   },
 
   streamingAsrLabel:function(){
-    if(!this.streamingAsrEnabled)return '识别完成后显示整句字幕';
+    if(!this.streamingAsrEnabled)return '识别完成后显示字幕';
     return this.streamingAsrServerAvailable
-      ?'说话时实时显示识别文字'
-      :'已开启；当前服务按完整句返回';
+      ?'说话时实时显示字幕'
+      :'当前服务按整句显示';
   },
 
   connect:function(){
