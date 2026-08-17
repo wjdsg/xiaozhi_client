@@ -192,6 +192,8 @@ class WebBridge:
         self._standby_message = ''
         self._session_end_pending = False
         self._reconnect_task: asyncio.Task | None = None
+        # 仅控制字幕对话页面的收音；离开对话或开始新对话时恢复为开启。
+        self._dialog_mic_enabled = True
         self._voice_start_time = 0.0
         self._wake_detect_time = 0.0
         self._wake_response_pcm = None  # 预缓存唤醒应答音PCM
@@ -285,6 +287,10 @@ class WebBridge:
                 self._silence_frames = 0
                 self._silence_threshold = 15  # 15帧×20ms=300ms
             def on_audio_data(self, audio_data):
+                if (self.bridge._device_state == DeviceState.LISTENING
+                        and not self.bridge._dialog_mic_enabled):
+                    self._silence_frames = 0
+                    return
                 if int(np.max(np.abs(audio_data))) > VAD_THRESHOLD:
                     self.bridge._voice_start_time = time.time()
                     self.bridge._vad_has_speech = True
@@ -384,10 +390,12 @@ class WebBridge:
                 await self.codec.clear_audio_queue()
             await asyncio.sleep(0.05)
 
+        self._dialog_mic_enabled = True
         self._keep_listening = True
         await self._play_wake_response()
         await self._send_listen_start()
         await self._set_state(DeviceState.LISTENING)
+        await self._broadcast_json({"type": "microphone", "enabled": True})
 
     async def _on_speech_end(self):
         """用户说完话后300ms静音触发: 播放反馈提示音(已禁用)"""
@@ -406,6 +414,8 @@ class WebBridge:
         )
 
     async def _on_energy_interrupt(self):
+        if not self._dialog_mic_enabled:
+            return
         if self._device_state != DeviceState.SPEAKING:
             return
         print("[Bridge] 能量打断: 检测到用户语音, 停止TTS播报")
@@ -484,6 +494,7 @@ class WebBridge:
             "enabled": self._accept_streaming_asr,
             "server_available": self._server_streaming_asr_available,
         })
+        await ws.send_json({"type": "microphone", "enabled": self._dialog_mic_enabled})
 
         # 发送当前状态, 如果xiaozhi断连则自动重连
         if self.xiaozhi and self.xiaozhi.connected:
@@ -552,12 +563,26 @@ class WebBridge:
             if not self.xiaozhi or not self.xiaozhi.connected:
                 await self._broadcast_json({"type": "error", "message": "xiaozhi未连接"})
                 return
+            self._dialog_mic_enabled = True
             self._keep_listening = True
             self._speech_start_time = 0.0  # 重置, 等首帧音频触发
             await self._send_listen_start()
             await self._set_state(DeviceState.LISTENING)
+            await self._broadcast_json({"type": "microphone", "enabled": True})
             print("[Bridge] 已发送listen start + 状态→listening")
+        elif t == "set_dialog_microphone":
+            enabled = bool(data.get("enabled", True))
+            self._dialog_mic_enabled = enabled
+            if self.xiaozhi and self.xiaozhi.connected:
+                if enabled and self._keep_listening:
+                    await self._send_listen_start()
+                    if self._device_state != DeviceState.LISTENING:
+                        await self._set_state(DeviceState.LISTENING)
+                elif not enabled and self._device_state == DeviceState.LISTENING:
+                    await self.xiaozhi.send_text(json.dumps({"type": "listen", "state": "stop"}))
+            await self._broadcast_json({"type": "microphone", "enabled": enabled})
         elif t == "stop_listening":
+            self._dialog_mic_enabled = True
             self._keep_listening = False
             await self.xiaozhi.send_text(json.dumps({"type": "listen", "state": "stop"}))
             await self._set_state(DeviceState.IDLE)
@@ -623,6 +648,7 @@ class WebBridge:
         self._intentional_standby = True
         self._standby_reason = reason
         self._standby_message = message
+        self._dialog_mic_enabled = True
         self._keep_listening = False
         self._cancel_idle_timer()
         if self.codec:
@@ -665,6 +691,8 @@ class WebBridge:
         """AudioCodec回调(音频线程): 麦克风采集→Opus编码→发送到xiaozhi
         对齐 py-xiaozhi AudioPlugin._on_encoded_audio (audio.py:193)
         """
+        if not self._dialog_mic_enabled:
+            return
         if self._device_state == DeviceState.SPEAKING:
             self._pre_listen_opus.append(opus_data)
             return

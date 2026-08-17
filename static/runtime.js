@@ -72,12 +72,15 @@ const LiveDialog=(function(){
 
   function dialogActionsHtml(){
     if(Runtime.state==='connecting')return '';
+    const micDisabled=Runtime.state==='disconnected'?' disabled':'';
+    const micIcon=Runtime.dialogMicrophoneEnabled?'ti-microphone':'ti-microphone-off';
+    const micButton='<button class="runtime-dialog-mic '+(Runtime.dialogMicrophoneEnabled?'':'muted')+'" onclick="Runtime.toggleDialogMicrophone()" title="'+(Runtime.dialogMicrophoneEnabled?'关闭麦克风':'开启麦克风')+'" aria-label="'+(Runtime.dialogMicrophoneEnabled?'关闭麦克风':'开启麦克风')+'" aria-pressed="'+(!Runtime.dialogMicrophoneEnabled)+'"'+micDisabled+'><i class="ti '+micIcon+'" aria-hidden="true"></i></button>';
     const label=Runtime.state==='disconnected'
       ?'<i class="ti ti-message-circle" aria-hidden="true"></i> 继续对话'
       :Runtime.state==='speaking'
         ?'<i class="ti ti-player-stop" aria-hidden="true"></i> 打断'
         :'<i class="ti ti-logout" aria-hidden="true"></i> 结束对话';
-    return '<div class="runtime-dialog-actions"><button class="runtime-dialog-primary" onclick="Runtime.primaryAction()">'+label+'</button></div>';
+    return '<div class="runtime-dialog-actions">'+micButton+'<button class="runtime-dialog-primary" onclick="Runtime.primaryAction()">'+label+'</button></div>';
   }
   function render(){
     if(currentApp!=='dialog')return;
@@ -235,6 +238,7 @@ const Runtime={
   timerLabel:'',
   pendingDialogStart:false,
   sessionEndReason:'',
+  dialogMicrophoneEnabled:true,
   streamingAsrEnabled:true,
   streamingAsrServerAvailable:false,
 
@@ -302,6 +306,7 @@ const Runtime={
 
   openDialog:function(source){
     const fromWake=source==='wake';
+    this.dialogMicrophoneEnabled=true;
     this.pendingDialogStart=!fromWake;
     if(!fromWake){
       LiveDialog.clear();
@@ -327,6 +332,7 @@ const Runtime={
     if(this.state==='connecting')return;
     if(this.state==='disconnected'){
       this.pendingDialogStart=true;
+      this.dialogMicrophoneEnabled=true;
       LiveDialog.clear();
       this.reconnect();
       return;
@@ -339,6 +345,15 @@ const Runtime={
       this.pendingDialogStart=false;
       this.send({type:'end_conversation'});
     }
+  },
+
+  toggleDialogMicrophone:function(){
+    if(currentApp!=='dialog'||this.state==='connecting'||this.state==='disconnected')return false;
+    const target=!this.dialogMicrophoneEnabled;
+    if(!this.send({type:'set_dialog_microphone',enabled:target}))return false;
+    this.dialogMicrophoneEnabled=target;
+    LiveDialog.render();
+    return true;
   },
 
   toggleWakeWord:function(){
@@ -440,6 +455,10 @@ const Runtime={
         }
         if(data.saved===false)this.errorMessage='实时字幕设置保存失败';
         if(currentApp==='settings')Settings.render();
+        break;
+      case 'microphone':
+        this.dialogMicrophoneEnabled=data.enabled!==false;
+        if(currentApp==='dialog')LiveDialog.render();
         break;
       case 'timer_start':this.startTimerDisplay(data.seconds,data.label);break;
       case 'timer_done':this.timerDone(data.label);break;
