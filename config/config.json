@@ -3,8 +3,8 @@
     "CLIENT_ID": "cff1e306-cce9-4ff6-b33e-60fefabf32c4",
     "DEVICE_ID": "2c:db:07:09:da:31",
     "NETWORK": {
-      "OTA_VERSION_URL": "http://10.18.204.33:8002/xiaozhi/ota/",
-      "WEBSOCKET_URL": "ws://10.18.204.33:5000/xiaozhi/v1/",
+      "OTA_VERSION_URL": "http://10.197.39.33:8002/xiaozhi/ota/",
+      "WEBSOCKET_URL": "ws://10.197.39.33:5000/xiaozhi/v1/",
       "WEBSOCKET_ACCESS_TOKEN": "test-token",
       "MQTT_INFO": null,
       "ACTIVATION_VERSION": "v1",
@@ -80,6 +80,6 @@
     "output_sample_rate": 48000,
     "input_channels": 2,
     "output_channels": 2,
-    "output_volume": 75
+    "output_volume": 50
   }
 }

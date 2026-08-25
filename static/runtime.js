@@ -23,11 +23,7 @@ const statusIcon=function(state){
 };
 
 const dialogHeader=function(){
-  let right='<i class="ti ti-microphone-off micoff" aria-hidden="true"></i>';
-  if(Runtime.state==='listening')right='<i class="ti ti-microphone micdot" aria-hidden="true"></i>';
-  if(Runtime.state==='thinking'||Runtime.state==='speaking')right='<div class="wvb" style="height:10px;width:4px"></div><div class="wvb" style="height:15px;width:4px;animation-delay:.2s"></div><div class="wvb" style="height:11px;width:4px;animation-delay:.4s"></div>';
-  return '<div class="topbar"><span>'+timeText()+'</span><span>'+statusIcon(Runtime.state)+'</span></div>'+
-    '<div class="head"><span class="head-mascot" onclick="goHome()" title="返回主屏">'+mascot(30,true)+'</span><span class="head-name">灵犀</span><div class="head-right">'+right+'</div></div>';
+  return '<div class="head runtime-dialog-head"><span class="head-mascot" onclick="goHome()" title="返回主屏">'+mascot(30,true)+'</span><span class="head-name">灵犀</span></div>';
 };
 
 const LiveDialog=(function(){
@@ -50,6 +46,9 @@ const LiveDialog=(function(){
 
   function centerHtml(){
     if(Runtime.state==='listening'){
+      if(!Runtime.dialogMicrophoneEnabled){
+        return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div class="runtime-muted-indicator" aria-hidden="true"><i class="ti ti-microphone-off"></i></div>'+activityHtml('muted','你已静音')+'</div>';
+      }
       const waves=[12,20,16,22,13].map(function(h,i){return '<div class="wvb" style="height:'+h+'px;animation-delay:'+(i*.15)+'s"></div>';}).join('');
       return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div>'+activityHtml('listening','正在聆听…')+'</div>';
     }
@@ -66,21 +65,21 @@ const LiveDialog=(function(){
 
   function activityHtml(kind,text){
     if(kind==='listening')return '<div class="runtime-activity listening"><span class="runtime-activity-dot"></span><span>'+text+'</span></div>';
+    if(kind==='muted')return '<div class="runtime-activity muted" role="status"><span>'+text+'</span></div>';
     return '<div class="runtime-activity responding"><span class="runtime-activity-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span>'+text+'</span></div>';
   }
 
 
   function dialogActionsHtml(){
     if(Runtime.state==='connecting')return '';
-    const micDisabled=Runtime.state==='disconnected'?' disabled':'';
     const micIcon=Runtime.dialogMicrophoneEnabled?'ti-microphone':'ti-microphone-off';
-    const micButton='<button class="runtime-dialog-mic '+(Runtime.dialogMicrophoneEnabled?'':'muted')+'" onclick="Runtime.toggleDialogMicrophone()" title="'+(Runtime.dialogMicrophoneEnabled?'关闭麦克风':'开启麦克风')+'" aria-label="'+(Runtime.dialogMicrophoneEnabled?'关闭麦克风':'开启麦克风')+'" aria-pressed="'+(!Runtime.dialogMicrophoneEnabled)+'"'+micDisabled+'><i class="ti '+micIcon+'" aria-hidden="true"></i></button>';
-    const label=Runtime.state==='disconnected'
-      ?'<i class="ti ti-message-circle" aria-hidden="true"></i> 继续对话'
-      :Runtime.state==='speaking'
-        ?'<i class="ti ti-player-stop" aria-hidden="true"></i> 打断'
-        :'<i class="ti ti-logout" aria-hidden="true"></i> 结束对话';
-    return '<div class="runtime-dialog-actions">'+micButton+'<button class="runtime-dialog-primary" onclick="Runtime.primaryAction()">'+label+'</button></div>';
+    const micButton=Runtime.state==='disconnected'?'':'<button class="runtime-dialog-mic '+(Runtime.dialogMicrophoneEnabled?'':'muted')+'" onclick="Runtime.toggleDialogMicrophone()" title="'+(Runtime.dialogMicrophoneEnabled?'关闭麦克风':'开启麦克风')+'" aria-label="'+(Runtime.dialogMicrophoneEnabled?'关闭麦克风':'开启麦克风')+'" aria-pressed="'+(!Runtime.dialogMicrophoneEnabled)+'"><i class="ti '+micIcon+'" aria-hidden="true"></i></button>';
+    const primaryLabel=Runtime.state==='disconnected'?'继续对话':Runtime.state==='speaking'?'打断':'结束对话';
+    const primaryIcon=Runtime.state==='speaking'?'ti-square-filled':'ti-phone-off';
+    const primaryContent=Runtime.state==='disconnected'?primaryLabel:'<i class="ti '+primaryIcon+'" aria-hidden="true"></i>';
+    const primaryClass=Runtime.state==='disconnected'?'is-text':Runtime.state==='speaking'?'is-interrupt':'is-end';
+    const micToast=Runtime.dialogMicStatusMessage?'<div class="runtime-mic-toast" role="status">'+escapeHtml(Runtime.dialogMicStatusMessage)+'</div>':'';
+    return '<div class="runtime-dialog-actions">'+micToast+micButton+'<button class="runtime-dialog-primary '+primaryClass+'" onclick="Runtime.primaryAction()" title="'+primaryLabel+'" aria-label="'+primaryLabel+'">'+primaryContent+'</button></div>';
   }
   function render(){
     if(currentApp!=='dialog')return;
@@ -89,7 +88,7 @@ const LiveDialog=(function(){
       body=centerHtml();
     }else{
       const responding=Runtime.state==='thinking'||Runtime.state==='speaking';
-      const activity=Runtime.state==='listening'?activityHtml('listening','正在聆听…'):responding?activityHtml('responding','正在回答…'):'';
+      const activity=Runtime.state==='listening'?(Runtime.dialogMicrophoneEnabled?activityHtml('listening','正在聆听…'):activityHtml('muted','你已静音')):responding?activityHtml('responding','正在回答…'):'';
       body='<div id="runtimeChat" class="runtime-chat fade">'+chatHtml()+'</div>'+activity+(responding?'<div class="glowbar"></div>':'');
     }
     const actions=dialogActionsHtml();
@@ -239,6 +238,8 @@ const Runtime={
   pendingDialogStart:false,
   sessionEndReason:'',
   dialogMicrophoneEnabled:true,
+  dialogMicStatusMessage:'',
+  dialogMicStatusTimer:null,
   streamingAsrEnabled:true,
   streamingAsrServerAvailable:false,
 
@@ -307,6 +308,8 @@ const Runtime={
   openDialog:function(source){
     const fromWake=source==='wake';
     this.dialogMicrophoneEnabled=true;
+    this.dialogMicStatusMessage='';
+    if(this.dialogMicStatusTimer){clearTimeout(this.dialogMicStatusTimer);this.dialogMicStatusTimer=null;}
     this.pendingDialogStart=!fromWake;
     if(!fromWake){
       LiveDialog.clear();
@@ -352,6 +355,14 @@ const Runtime={
     const target=!this.dialogMicrophoneEnabled;
     if(!this.send({type:'set_dialog_microphone',enabled:target}))return false;
     this.dialogMicrophoneEnabled=target;
+    this.dialogMicStatusMessage=target?'麦克风已开启':'麦克风已关闭';
+    if(this.dialogMicStatusTimer)clearTimeout(this.dialogMicStatusTimer);
+    const self=this;
+    this.dialogMicStatusTimer=setTimeout(function(){
+      self.dialogMicStatusTimer=null;
+      self.dialogMicStatusMessage='';
+      if(currentApp==='dialog')LiveDialog.render();
+    },1200);
     LiveDialog.render();
     return true;
   },
