@@ -9,3 +9,12 @@ log
 logs/
 __pycache__/
 bridge.log
+.venv-dictation/
+dictation_data/tmp/*
+dictation_data/history/*
+!dictation_data/history/README.md
+dictation_data/parent_uploads/*
+!dictation_data/parent_uploads/README.md
+cache/dictation_tts/*
+# Local cloud credentials; copied during deployment, never committed.
+local_config.py

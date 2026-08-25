@@ -1,6 +1,6 @@
-# AI 台灯三合一客户端
+# AI 台灯三合一客户端（含 AI 听写）
 
-这是可以独立复制和交付的 Windows 客户端目录，不依赖 `D:\qxyy` 下的其他文件。远端 Xiaozhi 服务不包含在本目录中，使用者的电脑必须能访问配置的服务地址。
+这是可以独立复制和交付的 Windows 客户端目录，不依赖 `D:\qxyy` 下的其他文件。项目已合并 AI 听写页面、教材词库、拍照 OCR、TTS 缓存和家长记录页。远端 Xiaozhi 服务不包含在本目录中，使用者的电脑必须能访问配置的服务地址。
 
 ## 一、运行前准备
 
@@ -22,7 +22,8 @@
 
 - 首次运行会在项目目录创建独立环境 `.venv`；
 - 自动安装 `requirements.txt` 中的运行依赖；
-- 启动本地网页服务、音频采集、AEC、唤醒词和 Xiaozhi 连接；
+- 自动准备隔离的 `.venv-dictation` OCR 工作进程环境；
+- 启动统一的 8765 网页服务、音频采集、AEC、唤醒词、Xiaozhi 连接和 AI 听写；
 - 自动打开 `http://127.0.0.1:8765`。
 
 以后再次启动仍然双击这个文件即可。关闭程序时回到命令窗口按 `Ctrl+C`，或关闭启动窗口。
@@ -36,8 +37,18 @@ cd D:\qxyy\taideng_sanheyi
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m venv .venv-dictation
+.\.venv-dictation\Scripts\python.exe -m pip install -r requirements-dictation.txt
 .\.venv\Scripts\python.exe run.py
 ```
+
+环境准备完成后，日常启动只需要在项目根目录执行：
+
+```powershell
+python run.py
+```
+
+不会再启动或依赖 5003、5004；主页面、AI 听写和家长记录页都由 8765 提供。家长记录页地址为 `http://127.0.0.1:8765/parent`。
 
 如果 PowerShell 禁止执行激活脚本，不需要激活环境，直接使用上面的 `.venv\Scripts\python.exe` 即可。
 
@@ -52,6 +63,8 @@ python -m venv .venv
 - `colorlog`：日志输出。
 
 项目还自带 `libs/opus.dll`、`libs/libspeexdsp.dll`，不需要另外下载 DLL。
+
+AI 听写使用独立工作进程和 `requirements-dictation.txt`，把 OpenCV/ONNX 与实时音频主进程隔离。OCR 模型按需加载，空闲约 5 分钟或累计 50 个重任务后自动回收。即使 OCR 环境暂时不可用，小智对话和教材选词页面仍能启动。
 
 只有在需要运行 `gen_responses.py`、重新生成预录制语音时，才需要安装可选依赖：
 
@@ -113,7 +126,8 @@ python -m venv .venv
 
 - `run.py`、`bridge.py`、`启动台灯.bat`；
 - `requirements.txt` 和 `requirements-tts.txt`；
-- `config/`、`models/`、`libs/`、`src/`、`static/`；
+- `requirements-dictation.txt`；
+- `config/`、`models/`、`libs/`、`src/`、`static/`、`dictation_data/`；
 - 根目录的 MP3 预录音文件。
 
 不建议复制 `.venv`、`__pycache__`、`log` 和 `bridge.log`，接收者应在自己的电脑重新安装依赖。复制后只需要重新执行“运行前准备”和“推荐启动方式”。

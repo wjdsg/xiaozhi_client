@@ -1,4 +1,5 @@
 import asyncio
+import queue as thread_queue
 import platform
 import re
 from typing import Any, Dict, List, Optional
@@ -87,7 +88,7 @@ def downmix_to_mono(
 
 
 def safe_queue_put(
-    queue: asyncio.Queue, item: Any, replace_oldest: bool = True
+    queue: Any, item: Any, replace_oldest: bool = True
 ) -> bool:
     """安全地将项目放入队列，队列满时可选择丢弃最旧数据.
 
@@ -102,13 +103,13 @@ def safe_queue_put(
     try:
         queue.put_nowait(item)
         return True
-    except asyncio.QueueFull:
+    except (asyncio.QueueFull, thread_queue.Full):
         if replace_oldest:
             try:
                 queue.get_nowait()  # 丢弃最旧的
                 queue.put_nowait(item)  # 放入新数据
                 return True
-            except asyncio.QueueEmpty:
+            except (asyncio.QueueEmpty, thread_queue.Empty):
                 # 理论上不会发生,但保险起见
                 queue.put_nowait(item)
                 return True

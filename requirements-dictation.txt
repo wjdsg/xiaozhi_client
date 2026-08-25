@@ -1,0 +1,11 @@
+# AI 听写内部工作进程（建议安装到 .venv-dictation）
+# python -m venv .venv-dictation
+# .\.venv-dictation\Scripts\python.exe -m pip install -r requirements-dictation.txt
+numpy==1.26.4
+opencv-python==4.10.0.84
+onnxruntime==1.20.1
+PyYAML==6.0.2
+loguru==0.7.3
+
+# 无缓存词条首次合成使用，与原 AI 听写项目的 CosyVoice 链路一致。
+dashscope==1.26.7

@@ -1,5 +1,6 @@
 import asyncio
 import gc
+import queue
 import threading
 from collections import deque
 from typing import Callable, List, Optional, Protocol
@@ -98,7 +99,9 @@ class AudioCodec:
         self.output_stream = None
 
         # 播放队列
-        self._output_buffer = asyncio.Queue(maxsize=500)
+        # PortAudio 回调和 asyncio 主线程会并发访问，必须使用线程安全队列。
+        # 50 帧约等于 1 秒，避免网络突发时累积成十秒级延迟。
+        self._output_buffer = queue.Queue(maxsize=50)
 
         # 回调和监听器（解耦外部依赖）
         self._encoded_callback: Optional[Callable] = None
@@ -662,7 +665,7 @@ class AudioCodec:
                 # 单声道输出
                 outdata[:, 0] = mono_samples_float
 
-        except asyncio.QueueEmpty:
+        except queue.Empty:
             # 无数据时输出静音
             outdata.fill(0)
 
@@ -689,7 +692,7 @@ class AudioCodec:
                     )
                     if len(resampled_data) > 0:
                         self._resample_output_buffer.extend(resampled_data)
-                except asyncio.QueueEmpty:
+                except queue.Empty:
                     break
 
             # 取出所需帧数的单声道数据
@@ -869,9 +872,11 @@ class AudioCodec:
                     )
 
             # 放入播放队列（不替换旧数据，阻塞等待）
-            if not safe_queue_put(self._output_buffer, pcm_data, replace_oldest=False):
-                # 队列满时阻塞等待
-                await asyncio.wait_for(self._output_buffer.put(pcm_data), timeout=2.0)
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while not safe_queue_put(self._output_buffer, pcm_data, replace_oldest=False):
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise asyncio.TimeoutError
+                await asyncio.sleep(0.005)
 
         except asyncio.TimeoutError:
             logger.warning("播放队列阻塞超时，丢弃 PCM 帧")
@@ -952,7 +957,7 @@ class AudioCodec:
             try:
                 self._output_buffer.get_nowait()
                 cleared_count += 1
-            except asyncio.QueueEmpty:
+            except queue.Empty:
                 break
 
         # 清空重采样缓冲区

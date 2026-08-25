@@ -31,6 +31,7 @@ setup_opus()  # 先加载opus.dll, 再导入依赖opuslib的模块
 
 from src.audio_codecs.audio_codec import AudioCodec  # import opuslib, 此时DLL已就绪
 from src.audio_codecs.energy_detector import EnergyDetector
+from src.dictation.web import DictationService
 
 # ==================== 常量 ====================
 SAMPLE_RATE_IN = 16000
@@ -172,6 +173,9 @@ class WebBridge:
         self._browser_broadcast_lock = asyncio.Lock()
         self._xiaozhi_connect_lock = asyncio.Lock()
         self.app = web.Application()
+        self._runner: web.AppRunner | None = None
+        self._site: web.TCPSite | None = None
+        self.dictation = DictationService(self)
         self._setup_routes()
         self._shutdown_event = asyncio.Event()
         self._keep_listening = False
@@ -231,9 +235,13 @@ class WebBridge:
         self._speech_start_time = 0.0   # 本轮对话首次音频发送时间
         self._pre_listen_opus = deque(maxlen=50)  # 打断前缓存的 Opus 帧(约1秒)
         self._log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge.log")
-        self._log_queue = asyncio.Queue()
+        self._log_queue = asyncio.Queue(maxsize=512)
         self._log_task: asyncio.Task | None = None
         self._last_xiaozhi_attempt = 0.0  # xiaozhi重连冷却时间戳
+        self._audio_send_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=25)
+        self._audio_sender_task: asyncio.Task | None = None
+        self._audio_drop_count = 0
+        self._active_mode = "home"
 
     def _log(self, msg):
         t = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -247,17 +255,20 @@ class WebBridge:
         while True:
             try:
                 line = await asyncio.wait_for(self._log_queue.get(), timeout=5.0)
-                with open(self._log_path, "a", encoding="utf-8") as f:
-                    f.write(line)
-                    f.flush()
+                await asyncio.to_thread(self._append_log_line, line)
             except asyncio.TimeoutError:
                 continue
             except Exception:
                 pass
 
+    def _append_log_line(self, line):
+        with open(self._log_path, "a", encoding="utf-8") as f:
+            f.write(line)
+
     def _setup_routes(self):
         self.app.router.add_get("/", self._handle_index)
         self.app.router.add_get("/ws", self._handle_browser_ws)
+        self.dictation.setup_routes(self.app)
         static_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "static"
         )
@@ -265,11 +276,14 @@ class WebBridge:
 
     # ========== 服务器启动 ==========
     async def start_server(self):
-        runner = web.AppRunner(self.app)
-        await runner.setup()
-        site = web.TCPSite(runner, self.config["local_host"], self.config["local_port"])
-        await site.start()
+        self._runner = web.AppRunner(self.app)
+        await self._runner.setup()
+        self._site = web.TCPSite(
+            self._runner, self.config["local_host"], self.config["local_port"]
+        )
+        await self._site.start()
         self._log_task = asyncio.create_task(self._log_writer())
+        self._audio_sender_task = asyncio.create_task(self._audio_sender_loop())
         print(f"[Bridge] HTTP服务: http://{self.config['local_host']}:{self.config['local_port']}")
         self._log("服务启动")
 
@@ -466,8 +480,9 @@ class WebBridge:
         self._cancel_idle_timer()
         self._cancel_reconnect_task()
         self._save_tts_cache()  # 关闭时落盘
-        if self._log_task:
-            self._log_task.cancel()
+        for task in (self._audio_sender_task, self._log_task):
+            if task:
+                task.cancel()
         if self._wake_word_detector:
             await self._wake_word_detector.stop()
         if self.xiaozhi:
@@ -477,6 +492,16 @@ class WebBridge:
         for ws in list(self.browser_ws_set):
             try: await ws.close()
             except Exception: pass
+        await self.dictation.close()
+        if self._runner:
+            await self._runner.cleanup()
+            self._runner = None
+            self._site = None
+        pending = [task for task in (self._audio_sender_task, self._log_task) if task]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._audio_sender_task = None
+        self._log_task = None
         print("[Bridge] 已关闭")
 
     # ========== HTTP ==========
@@ -495,6 +520,7 @@ class WebBridge:
             "server_available": self._server_streaming_asr_available,
         })
         await ws.send_json({"type": "microphone", "enabled": self._dialog_mic_enabled})
+        await ws.send_json({"type": "mode", "mode": self._active_mode})
 
         # 发送当前状态, 如果xiaozhi断连则自动重连
         if self.xiaozhi and self.xiaozhi.connected:
@@ -520,6 +546,8 @@ class WebBridge:
                             break
                 finally:
                     self.browser_ws_set.discard(ws)
+                    if not self.browser_ws_set and self._active_mode == "dictation":
+                        await self.leave_dictation_mode()
                 return
             now = time.time()
             if now - self._last_xiaozhi_attempt < 6:
@@ -552,6 +580,8 @@ class WebBridge:
             pass
         finally:
             self.browser_ws_set.discard(ws)
+            if not self.browser_ws_set and self._active_mode == "dictation":
+                await self.leave_dictation_mode()
             print(f"[Bridge] 浏览器断开 (共{len(self.browser_ws_set)})")
         return ws
 
@@ -636,6 +666,44 @@ class WebBridge:
             )
         elif t == "reconnect":
             await self._request_reconnect()
+        elif t == "dictation_enter":
+            await self.enter_dictation_mode()
+        elif t == "dictation_leave":
+            await self.leave_dictation_mode()
+
+    async def enter_dictation_mode(self):
+        if self._active_mode == "dictation":
+            return
+        self._active_mode = "dictation"
+        self._keep_listening = False
+        self._dialog_mic_enabled = False
+        while not self._audio_send_queue.empty():
+            try:
+                self._audio_send_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        if self.xiaozhi and self.xiaozhi.connected:
+            await self.xiaozhi.send_text(json.dumps({"type": "abort"}))
+            await self.xiaozhi.send_text(json.dumps({"type": "listen", "state": "stop"}))
+        if self.codec:
+            await self.codec.clear_audio_queue()
+        if self._wake_word_detector:
+            self._wake_word_detector.paused = True
+        await self._set_state(DeviceState.IDLE)
+        await self._broadcast_json({"type": "mode", "mode": "dictation"})
+        await self._broadcast_json({"type": "microphone", "enabled": False})
+
+    async def leave_dictation_mode(self):
+        if self._active_mode != "dictation":
+            return
+        self._active_mode = "home"
+        self._dialog_mic_enabled = True
+        if self.codec:
+            await self.codec.clear_audio_queue()
+        if self._wake_word_detector:
+            self._wake_word_detector.paused = False
+        await self._broadcast_json({"type": "mode", "mode": "home"})
+        await self._broadcast_json({"type": "microphone", "enabled": True})
 
     def _cancel_reconnect_task(self):
         task = self._reconnect_task
@@ -687,6 +755,33 @@ class WebBridge:
         }))
         return True
 
+    def _enqueue_mic_opus(self, opus_data: bytes) -> None:
+        if self._audio_send_queue.full():
+            try:
+                self._audio_send_queue.get_nowait()
+                self._audio_drop_count += 1
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            self._audio_send_queue.put_nowait(opus_data)
+        except asyncio.QueueFull:
+            self._audio_drop_count += 1
+
+    async def _audio_sender_loop(self):
+        """唯一的 Xiaozhi 音频发送协程，保证帧顺序且限制积压。"""
+        while True:
+            opus_data = await self._audio_send_queue.get()
+            try:
+                if (self._active_mode != "dictation" and self.xiaozhi
+                        and self.xiaozhi.connected
+                        and self._device_state == DeviceState.LISTENING
+                        and self._dialog_mic_enabled):
+                    await self.xiaozhi.send_audio(opus_data)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._log(f"音频上行失败: {exc}")
+
     def _on_mic_opus(self, opus_data):
         """AudioCodec回调(音频线程): 麦克风采集→Opus编码→发送到xiaozhi
         对齐 py-xiaozhi AudioPlugin._on_encoded_audio (audio.py:193)
@@ -700,12 +795,10 @@ class WebBridge:
             return
         if not self.xiaozhi or not self.xiaozhi.connected:
             return
-        # 直接在事件循环线程发送，不创建额外 task
-        # 对齐 py-xiaozhi 的 _schedule_send_audio → protocol.send_audio
         if not self._speech_start_time:
             self._speech_start_time = time.time()
         self._main_loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(self.xiaozhi.send_audio(opus_data))
+            self._enqueue_mic_opus, bytes(opus_data)
         )
 
     # ========== Xiaozhi → 扬声器 + 浏览器 ==========

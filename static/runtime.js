@@ -570,6 +570,7 @@ openApp=function(name){
   prototypeOpenApp(name);
   if(name==='dialog')LiveDialog.start();
   else if(name==='settings')Settings.start();
+  else if(name==='dictation')return;
   else{
     $('voiceSel').classList.remove('hidden');
     $('controls').classList.remove('hidden');
@@ -594,20 +595,20 @@ window.showHome=showHome;
 
 $('btnPlay').onclick=function(){
   if(currentApp==='dialog'){Runtime.primaryAction();return;}
-  if(currentApp==='home'||currentApp==='settings')return;
+  if(currentApp==='home'||currentApp==='settings'||currentApp==='dictation')return;
   const playing=modules[currentApp].togglePlay();
   this.innerHTML=playing?'<i class="ti ti-player-pause" aria-hidden="true"></i> 暂停':'<i class="ti ti-player-play" aria-hidden="true"></i> 播放';
 };
 
 $('btnRe').onclick=function(){
   if(currentApp==='dialog'){Runtime.reconnect();return;}
-  if(currentApp==='home'||currentApp==='settings')return;
+  if(currentApp==='home'||currentApp==='settings'||currentApp==='dictation')return;
   modules[currentApp].replay();
   $('btnPlay').innerHTML='<i class="ti ti-player-pause" aria-hidden="true"></i> 暂停';
 };
 
 $('btnSnd').onclick=function(){
-  if(currentApp==='dialog')return;
+  if(currentApp==='dialog'||currentApp==='dictation')return;
   if(currentApp==='home'||currentApp==='settings')return;
   Voice.on=!Voice.on;
   this.innerHTML=Voice.on?'<i class="ti ti-volume" aria-hidden="true"></i> 关闭语音':'<i class="ti ti-volume" aria-hidden="true"></i> 开启语音';

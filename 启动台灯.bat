@@ -15,6 +15,19 @@ if not exist ".venv\Scripts\python.exe" (
   if errorlevel 1 goto :failed
 )
 
+if not exist ".venv-dictation\Scripts\python.exe" (
+  echo 正在创建 AI 听写工作进程环境...
+  python -m venv .venv-dictation
+  if errorlevel 1 goto :failed
+)
+
+".venv-dictation\Scripts\python.exe" -c "import cv2, onnxruntime, yaml, loguru, numpy" >nul 2>nul
+if errorlevel 1 (
+  echo 正在安装 AI 听写依赖，首次运行需要联网...
+  ".venv-dictation\Scripts\python.exe" -m pip install -r requirements-dictation.txt
+  if errorlevel 1 goto :failed
+)
+
 call ".venv\Scripts\activate.bat"
 python -c "import aiohttp, websockets, sounddevice, opuslib, soxr, numpy, sherpa_onnx, colorlog" >nul 2>nul
 if errorlevel 1 (

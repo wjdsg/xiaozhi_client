@@ -1,0 +1,59 @@
+:root{color-scheme:light;--ink:#173b59;--muted:#7890a4;--line:#e3ecf3;--blue:#2597e7;--paper:#f8fbfd;--mint:#e5f7ef}
+*{box-sizing:border-box}
+html,body{min-height:100%;margin:0}
+body{display:grid;place-items:center;align-content:center;gap:16px;padding:26px;background:radial-gradient(circle at 20% 14%,#fff 0 10%,transparent 34%),linear-gradient(145deg,#edf5fa,#e7f0f7);color:var(--ink);font-family:"Microsoft YaHei UI","PingFang SC",sans-serif}
+.phone-shell{position:relative;width:min(390px,calc(100vw - 24px));height:min(780px,calc(100vh - 60px));min-height:620px;border:10px solid #17324a;border-radius:46px;background:#f7fbfe;box-shadow:0 28px 70px rgba(37,65,90,.22);overflow:hidden}
+.phone-island{position:absolute;z-index:8;top:10px;left:50%;width:108px;height:26px;transform:translateX(-50%);border-radius:99px;background:#17324a}
+.phone-screen{height:100%;padding:62px 20px 24px;overflow:auto;background:linear-gradient(180deg,#eaf6ff 0,#f7fbfe 31%,#f7fbfe 100%)}
+.parent-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px}.eyebrow{font-size:10px;letter-spacing:.18em;color:#4c92c6;font-weight:900}.parent-head h1{margin:4px 0 0;font-size:30px;letter-spacing:-.05em}.sync-state{display:flex;align-items:center;gap:6px;padding:7px 10px;border-radius:99px;background:rgba(255,255,255,.8);font-size:10px;color:#5d7a91;font-weight:800}.sync-state i{width:7px;height:7px;border-radius:50%;background:#28b982;box-shadow:0 0 0 4px rgba(40,185,130,.11)}
+.welcome-card{display:grid;grid-template-columns:46px 1fr;gap:12px;align-items:center;padding:15px;border:1px solid rgba(255,255,255,.9);border-radius:22px;background:rgba(255,255,255,.78);box-shadow:0 10px 25px rgba(57,100,134,.08);backdrop-filter:blur(12px)}.welcome-mark{width:46px;height:46px;display:grid;place-items:center;border-radius:15px;background:linear-gradient(145deg,#2ca2ed,#167fc7);color:#fff;font-family:"STKaiti","KaiTi",serif;font-size:23px;font-weight:900}.welcome-card b{font-size:14px}.welcome-card p{margin:4px 0 0;color:var(--muted);font-size:11px;line-height:1.5}
+.section-title{display:flex;align-items:center;justify-content:space-between;margin:23px 2px 10px}.section-title b{font-size:15px}.section-title button{border:0;background:transparent;color:#248bd2;font-weight:800;cursor:pointer}
+.record-list{display:flex;flex-direction:column;gap:10px}.record-card{width:100%;display:grid;grid-template-columns:68px 1fr 20px;gap:12px;align-items:center;padding:11px;border:1px solid var(--line);border-radius:19px;background:#fff;text-align:left;color:inherit;box-shadow:0 8px 19px rgba(48,84,112,.06);cursor:pointer}.record-card:active{transform:scale(.985)}.record-cover{width:68px;height:68px;border-radius:14px;object-fit:cover;background:#edf3f7}.record-copy b{display:block;font-size:14px}.record-copy span{display:block;margin-top:5px;color:#667f94;font-size:11px}.record-copy small{display:block;margin-top:8px;color:#91a4b3;font-size:9px}.record-arrow{font-size:24px;color:#aac0d1}.empty-card,.loading-card{min-height:210px;display:grid;place-items:center;align-content:center;text-align:center;border:1px dashed #cfdde8;border-radius:22px;color:#8097aa;background:rgba(255,255,255,.55)}.empty-card strong{font-size:15px;color:#4b6b84}.empty-card p,.loading-card p{margin:7px 20px;font-size:11px;line-height:1.6}.loading-card span{width:25px;height:25px;border:3px solid #d8e7f1;border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(1turn)}}
+.record-detail{position:absolute;z-index:10;inset:0;display:flex;flex-direction:column;padding:56px 20px 20px;background:#f7fbfe;transform:translateX(102%);transition:transform .28s cubic-bezier(.2,.8,.2,1)}.record-detail.open{transform:none}.detail-head{display:grid;grid-template-columns:42px 1fr;gap:11px;align-items:center}.detail-head button{width:42px;height:42px;border:0;border-radius:14px;background:#e9f3fa;color:#28648e;font-size:29px;line-height:1;cursor:pointer}.detail-head b{display:block;font-size:18px}.detail-head small{display:block;margin-top:3px;color:var(--muted);font-size:10px}.detail-tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:18px 0 14px;padding:4px;border-radius:14px;background:#eaf1f6}.detail-tabs button{height:36px;border:0;border-radius:11px;background:transparent;color:#69849a;font-weight:900;cursor:pointer}.detail-tabs button.on{background:#fff;color:#207fbd;box-shadow:0 3px 9px rgba(50,80,105,.1)}.detail-content{flex:1;min-height:0;overflow:auto}.photo-stack{display:flex;flex-direction:column;gap:12px}.photo-stack figure{margin:0;padding:8px;border:1px solid var(--line);border-radius:18px;background:#fff}.photo-stack img{display:block;width:100%;max-height:470px;border-radius:12px;object-fit:contain;background:#eff3f6}.photo-stack figcaption{padding:8px 4px 2px;color:#7c92a4;font-size:10px}.word-summary{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding:12px 14px;border-radius:15px;background:var(--mint);color:#37745f;font-size:11px}.word-summary b{font-size:17px}.word-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;counter-reset:word}.word-item{counter-increment:word;min-width:0;padding:10px 6px;border:1px solid var(--line);border-radius:13px;background:#fff;text-align:center}.word-item:before{content:counter(word);display:block;margin-bottom:4px;color:#a2b1bd;font-size:8px}.word-item b{display:block;overflow:hidden;text-overflow:ellipsis;color:#244d6c;font-size:13px;white-space:nowrap}
+.error-card{padding:18px;border-radius:17px;background:#fff1f1;color:#b95757;font-size:12px;text-align:center}
+.sim-caption{margin:0;color:#7790a5;font-size:11px;letter-spacing:.05em}
+@media(max-width:520px){body{display:block;padding:0;background:#f7fbfe}.phone-shell{width:100vw;height:100dvh;min-height:0;border:0;border-radius:0;box-shadow:none}.phone-island,.sim-caption{display:none}.phone-screen{padding-top:28px}.record-detail{padding-top:26px}}
+@media(prefers-reduced-motion:reduce){.record-detail,.record-card{transition:none}.loading-card span{animation:none}}
+
+/* 仅借用原产品手机外轮廓；内部信息架构为听写记录重新设计。 */
+.phone-shell{width:min(280px,calc(100vw - 24px));height:min(560px,calc(100vh - 60px));min-height:520px;border:10px solid #14263a;border-radius:34px;background:#f2f8fd;box-shadow:0 24px 58px rgba(37,65,90,.22)}
+.phone-island{display:none}
+.phone-screen{padding:12px 12px 18px;background:linear-gradient(180deg,#eaf5fd 0,#f2f8fd 28%,#f2f8fd 100%)}
+.phone-status{height:18px;display:flex;justify-content:space-between;align-items:center;padding:0 4px;color:#092f53;font-size:8px}.phone-status b,.phone-status span{font-size:8px;font-weight:900}
+.parent-head{margin:6px 2px 12px}.eyebrow{font-size:7px;letter-spacing:.14em}.parent-head h1{margin-top:2px;font-size:21px}.sync-state{gap:4px;padding:5px 7px;font-size:7px}.sync-state i{width:5px;height:5px;box-shadow:0 0 0 3px rgba(40,185,130,.11)}
+.welcome-card{grid-template-columns:38px 1fr;gap:9px;padding:10px;border-radius:15px;box-shadow:0 7px 18px rgba(57,100,134,.07)}.welcome-mark{width:38px;height:38px;border-radius:11px;font-size:19px}.welcome-card b{font-size:10px}.welcome-card p{margin-top:3px;font-size:8px}
+.section-title{margin:15px 2px 7px}.section-title b{font-size:11px}.section-title button{font-size:8px}
+.record-list{gap:7px}.record-card{grid-template-columns:53px 1fr 15px;gap:9px;padding:8px;border-radius:14px;box-shadow:0 6px 14px rgba(48,84,112,.05)}.record-cover{width:53px;height:53px;border-radius:10px}.record-copy b{font-size:10px}.record-copy span{margin-top:3px;font-size:8px}.record-copy small{margin-top:6px;font-size:7px}.record-arrow{font-size:19px}.empty-card,.loading-card{min-height:170px;border-radius:16px}.empty-card strong{font-size:11px}.empty-card p,.loading-card p{margin:6px 16px;font-size:8px}.loading-card span{width:21px;height:21px}
+.record-detail{padding:30px 12px 12px;background:#f2f8fd}.detail-head{grid-template-columns:34px 1fr;gap:8px}.detail-head button{width:34px;height:34px;border-radius:10px;font-size:24px}.detail-head b{font-size:14px}.detail-head small{font-size:8px}.detail-tabs{margin:12px 0 10px}.detail-tabs button{height:31px;font-size:9px}.photo-stack{gap:8px}.photo-stack figure{padding:6px;border-radius:13px}.photo-stack img{max-height:370px;border-radius:9px}.word-summary{margin-bottom:8px;padding:9px 10px;border-radius:11px;font-size:8px}.word-summary b{font-size:13px}.word-grid{gap:5px}.word-item{padding:7px 4px;border-radius:10px}.word-item b{font-size:10px}
+@media(max-width:520px){.phone-shell{width:100vw;height:100dvh;min-height:0;border:0;border-radius:0}.phone-screen{padding:8px 12px 18px}.record-detail{padding-top:24px}}
+
+/* 家长端信息需要在台灯模拟器的高 DPI 画布中保持清晰可读。 */
+.phone-status,.phone-status b,.phone-status span{font-size:10px}
+.eyebrow{font-size:8px}
+.parent-head h1{font-size:26px}
+.sync-state{font-size:9px}
+.welcome-card b{font-size:12px}
+.welcome-card p{font-size:9px}
+.section-title b{font-size:13px}
+.section-title button{font-size:9px}
+.record-copy b{font-size:12px}
+.record-copy span{font-size:9px}
+.record-copy small{font-size:8px}
+
+/* 详情页单页展示照片与词表，并允许逐张删除上传照片。 */
+.detail-content{padding-bottom:8px}
+.detail-section+.detail-section{margin-top:16px;padding-top:14px;border-top:1px solid #e1ebf2}
+.detail-section-title{display:flex;align-items:center;justify-content:space-between;margin:0 2px 8px;color:#244d6c}
+.detail-section-title b{font-size:13px}
+.detail-section-title span{color:#8aa0b2;font-size:9px}
+.photo-stack figure{position:relative}
+.photo-stack figcaption{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.photo-delete-button{border:0;border-radius:8px;padding:4px 8px;background:#fff1f1;color:#c75b5b;font-size:9px;font-weight:800;cursor:pointer}
+.photo-delete-button:active{background:#ffe2e2}
+.photo-preview-button{display:block;width:100%;padding:0;border:0;background:transparent;cursor:zoom-in}
+.photo-preview-button img{display:block;width:100%;max-height:370px;border-radius:9px;object-fit:contain;background:#eff3f6}
+.photo-viewer{position:absolute;z-index:30;inset:0;display:grid;place-items:center;padding:34px 14px 22px;background:rgba(13,35,54,.88);opacity:0;pointer-events:none;transition:opacity .2s ease}
+.photo-viewer.open{opacity:1;pointer-events:auto}
+.photo-viewer img{display:block;max-width:100%;max-height:100%;border-radius:12px;object-fit:contain;box-shadow:0 16px 36px rgba(0,0,0,.3)}
+.photo-viewer-close{position:absolute;top:12px;right:12px;width:34px;height:34px;border:0;border-radius:50%;background:rgba(255,255,255,.94);color:#214b6b;font-size:24px;line-height:1;cursor:pointer}
+.photo-viewer-close:active{background:#dff0fa}

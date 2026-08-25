@@ -1,4 +1,6 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import queue
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -24,7 +26,8 @@ class WakeWordDetector:
         self.detection_task = None
 
         # 音频数据队列（用于异步处理）
-        self._audio_queue = asyncio.Queue(maxsize=100)
+        self._audio_queue = queue.Queue(maxsize=4)
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wake-word")
 
         # 防重复触发机制
         self.last_detection_time = 0
@@ -152,12 +155,12 @@ class WakeWordDetector:
         try:
             # 将音频数据放入队列，由检测循环异步处理
             self._audio_queue.put_nowait(audio_data.copy())
-        except asyncio.QueueFull:
+        except queue.Full:
             # 队列满时丢弃最旧数据
             try:
                 self._audio_queue.get_nowait()
                 self._audio_queue.put_nowait(audio_data.copy())
-            except asyncio.QueueEmpty:
+            except queue.Empty:
                 self._audio_queue.put_nowait(audio_data.copy())
         except Exception as e:
             logger.debug(f"音频数据入队失败: {e}")
@@ -243,7 +246,7 @@ class WakeWordDetector:
 
             try:
                 audio_data = self._audio_queue.get_nowait()
-            except asyncio.QueueEmpty:
+            except queue.Empty:
                 return
 
             if audio_data is None or len(audio_data) == 0:
@@ -264,7 +267,7 @@ class WakeWordDetector:
             # 将同步的CPU密集推理(accept+decode)丢到线程池执行,
             # 避免阻塞asyncio事件循环(否则会拖慢同一循环上的WebSocket收发/TTS入队)
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, self._infer_sync, samples)
+            result = await loop.run_in_executor(self._executor, self._infer_sync, samples)
 
             if result:
                 await self._handle_detection_result(result)
@@ -329,8 +332,10 @@ class WakeWordDetector:
         while not self._audio_queue.empty():
             try:
                 self._audio_queue.get_nowait()
-            except asyncio.QueueEmpty:
+            except queue.Empty:
                 break
+
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
         logger.info("Sherpa-ONNX KeywordSpotter检测器已停止")
 

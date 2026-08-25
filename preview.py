@@ -11,6 +11,7 @@ STATIC_DIR = PROJECT_DIR / "static"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.utils.page_inject import render_index_html
+from src.dictation.web import DictationService
 
 
 async def index(_request: web.Request) -> web.Response:
@@ -19,7 +20,16 @@ async def index(_request: web.Request) -> web.Response:
 
 app = web.Application()
 app.router.add_get("/", index)
+dictation = DictationService()
+dictation.setup_routes(app)
 app.router.add_static("/assets/", STATIC_DIR, show_index=False)
+
+
+async def cleanup(_app):
+    await dictation.close()
+
+
+app.on_cleanup.append(cleanup)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>灵犀家长 · 听写记录</title>
+  <link rel="stylesheet" href="/static/parent-phone.css?v=20260820-4">
+</head>
+<body>
+  <main class="phone-shell" aria-label="家长手机模拟页面">
+    <div class="phone-island" aria-hidden="true"></div>
+    <div class="phone-screen">
+      <div class="phone-status"><b id="statusTime">--:--</b><span>5G&nbsp; 96%</span></div>
+      <header class="parent-head">
+        <div>
+          <span class="eyebrow">LINGXI FAMILY</span>
+          <h1>听写记录</h1>
+        </div>
+        <span class="sync-state"><i></i>与台灯同步</span>
+      </header>
+
+      <section class="welcome-card">
+        <div class="welcome-mark">灵</div>
+        <div><b>孩子完成听写后</b></div>
+      </section>
+
+      <div class="section-title"><b>最近记录</b><button id="refreshButton">刷新</button></div>
+      <section id="recordList" class="record-list" aria-live="polite">
+        <div class="loading-card"><span></span><p>正在同步听写记录</p></div>
+      </section>
+    </div>
+
+    <section id="recordDetail" class="record-detail" aria-hidden="true">
+      <header class="detail-head">
+        <button id="detailBack" aria-label="返回记录列表">‹</button>
+        <div><b>本次听写</b><small id="detailMeta"></small></div>
+      </header>
+      <div id="detailContent" class="detail-content"></div>
+    </section>
+    <section id="photoViewer" class="photo-viewer" aria-hidden="true" role="dialog" aria-modal="true" aria-label="查看听写照片">
+      <button id="photoViewerClose" class="photo-viewer-close" aria-label="关闭照片预览">×</button>
+      <img id="photoViewerImage" alt="">
+    </section>
+  </main>
+  <p class="sim-caption">家长手机模拟页 · 上传完成后自动同步</p>
+  <script src="/static/parent-phone.js?v=20260820-5"></script>
+</body>
+</html>
