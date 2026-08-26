@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI台灯</title>
 <link rel="stylesheet" href="/assets/vendor/tabler-icons.min.css">
-<link rel="stylesheet" href="/assets/runtime.css?v=20260825-original-dialog-1">
+<link rel="stylesheet" href="/assets/runtime.css?v=20260826-end-call-1">
 <style>
 @keyframes wv{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
 @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
@@ -338,8 +338,7 @@ select{border-radius:999px;border:1px solid var(--line);padding:6px 10px;font-si
 .camera-page .camera-history>span{display:none}
 .camera-page .capture-language{left:auto;right:70px;bottom:18px;transform:none;padding:5px;gap:4px}
 .camera-page .capture-language button{padding:8px 9px}
-.camera-page .retake-button{right:8px;bottom:18px;padding:8px 8px;font-size:9px}
-.camera-page .crop-confirm{position:absolute;z-index:7;left:50%;bottom:18px;transform:translateX(-50%);min-width:108px;padding:10px 18px;border:0;border-radius:999px;background:#2b9bf4;color:#fff;font-size:11px;font-weight:900;box-shadow:0 5px 14px rgba(0,0,0,.25)}
+.camera-page .crop-confirm{position:absolute;z-index:7;left:50%;bottom:18px;transform:translateX(-50%);min-width:132px;padding:12px 24px;border:0;border-radius:13px;background:#2b9bf4;color:#fff;font-size:13px;font-weight:900;box-shadow:0 8px 18px rgba(0,0,0,.25)}
 /* 来源页简化为两个核心入口，减少儿童和家长的阅读负担。 */
 .source-page .source-menu{grid-template-rows:minmax(0,1fr) 1px minmax(0,1fr);border-radius:20px}
 .source-page .source-row{grid-template-columns:64px 1fr 24px;padding:18px 16px;gap:14px}
@@ -378,10 +377,24 @@ select{border-radius:999px;border:1px solid var(--line);padding:6px 10px;font-si
 /* 截图后的三项操作：统一居中、等高、等宽，主次层级清晰。 */
 .camera-page .capture-actions{position:absolute;z-index:7;left:50%;bottom:16px;transform:translateX(-50%);display:flex;align-items:center;gap:6px;padding:5px;border-radius:14px;background:rgba(8,29,47,.82);backdrop-filter:blur(10px);box-shadow:0 6px 18px rgba(0,0,0,.2)}
 .camera-page .capture-actions .capture-language{position:static;transform:none;display:flex;gap:5px;padding:0;background:transparent;backdrop-filter:none}
-.camera-page .capture-actions .capture-language button,.camera-page .capture-actions .crop-confirm{position:static;left:auto;bottom:auto;transform:none;min-width:72px;height:34px;padding:0 10px;border-radius:10px;border:1px solid rgba(255,255,255,.7);font-size:10px;font-weight:900;white-space:nowrap;box-shadow:none}
+.camera-page .capture-actions .capture-language button{position:static;left:auto;bottom:auto;transform:none;min-width:72px;height:34px;padding:0 10px;border-radius:10px;border:1px solid rgba(255,255,255,.7);font-size:10px;font-weight:900;white-space:nowrap;box-shadow:none}
+.camera-page .capture-actions .crop-confirm{position:static;left:auto;bottom:auto;transform:none;min-width:132px;height:46px;padding:0 24px;border-radius:13px;font-size:13px;box-shadow:0 8px 18px rgba(0,0,0,.25)}
 .camera-page .capture-actions .capture-language button{background:rgba(255,255,255,.12);color:#fff}.camera-page .capture-actions .capture-language button.on{background:#2b9bf4;border-color:#2b9bf4;color:#fff}
-  .camera-page .capture-actions .retake-button{position:static;min-width:68px;height:34px;padding:0 10px;border-radius:10px;background:rgba(255,255,255,.1);font-size:9px;color:#fff}
   .camera-page .capture-actions .crop-confirm{background:#2b9bf4;color:#fff;border-color:#2b9bf4}
+/* 批量拍照后的操作坞：三项同排，语言按钮同权重，小屏保持可点击尺寸。 */
+.camera-page .capture-choice-actions{left:50%;right:auto;bottom:14px;transform:translateX(-50%);width:calc(100% - 20px);max-width:378px;box-sizing:border-box;display:grid;grid-template-columns:minmax(94px,.95fr) minmax(176px,2.05fr);align-items:stretch;gap:8px;padding:7px;border:1px solid rgba(163,197,222,.25);border-radius:16px;background:rgba(7,28,45,.9);box-shadow:0 10px 26px rgba(0,0,0,.25);backdrop-filter:blur(14px)}
+.camera-page .capture-choice-actions .batch-add-button{position:static;display:flex;align-items:center;justify-content:center;gap:7px;min-width:0;height:56px;padding:0 10px;border:1px solid rgba(180,207,227,.5);border-radius:13px;background:rgba(255,255,255,.035);color:#f5f9fc;font-size:12px;font-weight:850;letter-spacing:.01em;box-shadow:inset 0 1px rgba(255,255,255,.05);white-space:nowrap}
+.camera-page .capture-choice-actions .batch-add-button svg{flex:0 0 25px;width:25px;height:25px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.camera-page .capture-choice-actions .capture-language{position:static;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;min-width:0;padding:0;background:transparent;transform:none;backdrop-filter:none}
+.camera-page .capture-choice-actions .capture-language button,.camera-page .capture-choice-actions .capture-language button.on{position:static;display:flex;align-items:center;justify-content:center;gap:7px;min-width:0;height:56px;padding:0 9px;border:1px solid rgba(71,155,215,.72);border-radius:13px;background:rgba(24,61,88,.78);color:#f8fbfd;font-size:12px;font-weight:900;line-height:1;white-space:nowrap;box-shadow:inset 0 1px rgba(255,255,255,.06),0 4px 12px rgba(0,0,0,.13);transform:none}
+.camera-page .capture-choice-actions .capture-language button span{margin:0;font-size:inherit;color:inherit}
+.camera-page .capture-choice-actions .capture-language button i{display:grid;place-items:center;flex:0 0 27px;width:27px;height:27px;margin:0;border:1px solid rgba(129,190,234,.62);border-radius:50%;background:rgba(75,134,179,.42);color:#fff;font-size:10px;font-style:normal;font-weight:900}
+.camera-page .capture-choice-actions button{touch-action:manipulation;transition:transform .14s ease,background-color .14s ease,border-color .14s ease}
+.camera-page .capture-choice-actions button:active{transform:scale(.965)}
+.camera-page .capture-choice-actions button:focus-visible{outline:2px solid #8fd1ff;outline-offset:2px}
+.camera-page .capture-choice-actions button:disabled{opacity:.48;cursor:not-allowed}
+@media (max-width:400px){.camera-page .capture-choice-actions{width:calc(100% - 14px);grid-template-columns:minmax(84px,.9fr) minmax(166px,2.1fr);gap:6px;padding:6px}.camera-page .capture-choice-actions .batch-add-button,.camera-page .capture-choice-actions .capture-language button,.camera-page .capture-choice-actions .capture-language button.on{height:52px;font-size:10.5px}.camera-page .capture-choice-actions .batch-add-button{gap:5px;padding:0 7px}.camera-page .capture-choice-actions .batch-add-button svg{width:22px;height:22px;flex-basis:22px}.camera-page .capture-choice-actions .capture-language{gap:6px}.camera-page .capture-choice-actions .capture-language button,.camera-page .capture-choice-actions .capture-language button.on{gap:5px;padding:0 6px}.camera-page .capture-choice-actions .capture-language button i{width:24px;height:24px;flex-basis:24px;font-size:9px}}
+@media (max-width:340px){.camera-page .capture-choice-actions{grid-template-columns:minmax(78px,.9fr) minmax(156px,2.1fr)}.camera-page .capture-choice-actions .capture-language button i{display:none}.camera-page .capture-choice-actions .capture-language button,.camera-page .capture-choice-actions .capture-language button.on{padding:0 5px;font-size:10.5px}}
   .ocr-view-btn{align-self:flex-start;border:1px solid #cde3f1;border-radius:9px;background:#f4faff;color:#247fb6;font-size:10px;font-weight:800;padding:6px 9px}
 .ocr-visual{position:absolute;z-index:40;inset:8px;border-radius:18px;background:rgba(247,252,255,.98);padding:10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 18px 50px rgba(8,31,50,.35)}
 .ocr-visual-head{display:flex;align-items:center;gap:8px;color:#214d72;font-size:12px}.ocr-visual-head span{flex:1;color:#7894aa;font-size:9px}.ocr-visual-head button{width:26px;height:26px;border:0;border-radius:50%;background:#eaf4fb;color:#477596;font-size:19px;line-height:1}.ocr-visual-stage{position:relative;flex:1;min-height:0;display:grid;place-items:center;overflow:auto;background:#e8eef2;border-radius:12px}.ocr-visual-stage img{display:block;max-width:100%;max-height:100%;object-fit:contain}.ocr-visual-stage canvas{position:absolute;max-width:100%;max-height:100%;pointer-events:none}
@@ -800,8 +813,8 @@ $('btnSnd').onclick=function(){Voice.on=!Voice.on;this.innerHTML=Voice.on?'<i cl
     showHome();
 </script>
 <script src="/static/camera.js?v=20260818-1"></script>
-  <script src="/static/dictation.js?v=20260825-ocr-tts-fix-2"></script>
-  <script src="/assets/runtime.js?v=20260825-original-dialog-1"></script>
+  <script src="/static/dictation.js?v=20260826-cue-copy-1"></script>
+  <script src="/assets/runtime.js?v=20260826-hide-end-subtitle-2"></script>
   <style id="result-upload-visual-overrides">
     .result-upload-head .dnav-title b{font-size:16px}
     .result-upload-head .dstep{font-size:11px}

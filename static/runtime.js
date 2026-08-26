@@ -56,8 +56,9 @@ const LiveDialog=(function(){
     if(Runtime.state==='disconnected'){
       const connectionFailed=Runtime.sessionEndReason==='connection_lost';
       const title=connectionFailed?'暂时无法连接':'本次对话已结束';
-      const subtitle=Runtime.errorMessage||(connectionFailed?'请检查网络后继续对话':'点击下方“继续对话”重新开始');
-      return '<div class="runtime-center fade">'+mascot(100,true)+'<div class="runtime-title">'+title+'</div><div class="runtime-sub">'+escapeHtml(subtitle)+'</div></div>';
+      const subtitle=Runtime.errorMessage||(connectionFailed?'请检查网络后继续对话':'');
+      const subtitleHtml=subtitle?'<div class="runtime-sub">'+escapeHtml(subtitle)+'</div>':'';
+      return '<div class="runtime-center fade">'+mascot(100,true)+'<div class="runtime-title">'+title+'</div>'+subtitleHtml+'</div>';
     }
     const waves=[12,20,16,22,13].map(function(h,i){return '<div class="wvb" style="height:'+h+'px;animation-delay:'+(i*.15)+'s"></div>';}).join('');
     return '<div class="runtime-center fade">'+mascot(112)+'<div class="runtime-title">我在</div><div style="display:flex;gap:5px;height:22px;align-items:center">'+waves+'</div><div class="runtime-wait-cursor" aria-hidden="true"></div></div>';
@@ -75,8 +76,8 @@ const LiveDialog=(function(){
     const micIcon=Runtime.dialogMicrophoneEnabled?'ti-microphone':'ti-microphone-off';
     const micButton=Runtime.state==='disconnected'?'':'<button class="runtime-dialog-mic '+(Runtime.dialogMicrophoneEnabled?'':'muted')+'" onclick="Runtime.toggleDialogMicrophone()" title="'+(Runtime.dialogMicrophoneEnabled?'关闭麦克风':'开启麦克风')+'" aria-label="'+(Runtime.dialogMicrophoneEnabled?'关闭麦克风':'开启麦克风')+'" aria-pressed="'+(!Runtime.dialogMicrophoneEnabled)+'"><i class="ti '+micIcon+'" aria-hidden="true"></i></button>';
     const primaryLabel=Runtime.state==='disconnected'?'继续对话':Runtime.state==='speaking'?'打断':'结束对话';
-    const primaryIcon=Runtime.state==='speaking'?'ti-square-filled':'ti-phone-off';
-    const primaryContent=Runtime.state==='disconnected'?primaryLabel:'<i class="ti '+primaryIcon+'" aria-hidden="true"></i>';
+    const endCallIcon='<svg class="runtime-end-call-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .38-.21.73-.55.9-1.01.5-1.96 1.15-2.8 1.93a.98.98 0 0 1-1.39-.02L.27 13.24a.95.95 0 0 1-.03-1.32C3.29 8.91 7.45 7 12 7s8.71 1.91 11.76 4.92c.38.37.39.97.02 1.34l-2.39 2.39a.98.98 0 0 1-1.38.02 13.3 13.3 0 0 0-2.82-1.96 1 1 0 0 1-.55-.9v-3.1A15.4 15.4 0 0 0 12 9Z"/></svg>';
+    const primaryContent=Runtime.state==='disconnected'?primaryLabel:Runtime.state==='speaking'?'<i class="ti ti-square-filled" aria-hidden="true"></i>':endCallIcon;
     const primaryClass=Runtime.state==='disconnected'?'is-text':Runtime.state==='speaking'?'is-interrupt':'is-end';
     const micToast=Runtime.dialogMicStatusMessage?'<div class="runtime-mic-toast" role="status">'+escapeHtml(Runtime.dialogMicStatusMessage)+'</div>':'';
     return '<div class="runtime-dialog-actions">'+micToast+micButton+'<button class="runtime-dialog-primary '+primaryClass+'" onclick="Runtime.primaryAction()" title="'+primaryLabel+'" aria-label="'+primaryLabel+'">'+primaryContent+'</button></div>';
@@ -413,7 +414,7 @@ const Runtime={
     switch(data.type){
       case 'session_end':
         this.sessionEndReason=data.reason||'session_ended';
-        this.errorMessage=data.message||"\u672c\u6b21\u5bf9\u8bdd\u5df2\u7ed3\u675f\uff0c\u53ef\u4ee5\u70b9\u51fb\u7ee7\u7eed\u5bf9\u8bdd";
+        this.errorMessage=data.message||'';
         LiveDialog.clear();
         this.setState('disconnected');
         break;

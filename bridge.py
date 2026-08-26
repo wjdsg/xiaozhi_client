@@ -531,7 +531,7 @@ class WebBridge:
                 await ws.send_json({
                     "type": "session_end",
                     "reason": self._standby_reason or "session_ended",
-                    "message": self._standby_message or "本次对话已结束，可以点击继续对话",
+                    "message": self._standby_message or "",
                 })
                 await ws.send_json({"type": "wake_word", "enabled": self._wake_word_enabled})
                 await ws.send_json({"type": "light_state", "level": self._light_level})
@@ -661,9 +661,7 @@ class WebBridge:
                 "type": "light_state", "level": self._light_level
             })
         elif t == "end_conversation":
-            await self._enter_standby(
-                "user_ended", "本次对话已结束，可以点击继续对话"
-            )
+            await self._enter_standby("user_ended", "")
         elif t == "reconnect":
             await self._request_reconnect()
         elif t == "dictation_enter":

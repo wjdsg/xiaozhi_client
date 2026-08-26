@@ -45,7 +45,7 @@
 .runtime-dialog-page .runtime-chat{margin-top:4px}
 .runtime-activity.muted{color:#8d9eae}
 .runtime-muted-indicator{display:flex;align-items:center;justify-content:center;width:32px;height:22px;color:#94a6b6;font-size:20px}
-.runtime-dialog-actions{position:relative;flex:0 0 auto;display:flex;align-items:center;justify-content:center;min-height:48px;gap:14px;padding:8px 0 1px;border-top:1px solid rgba(190,215,235,.55)}
+.runtime-dialog-actions{position:relative;flex:0 0 auto;display:flex;align-items:center;justify-content:center;min-height:48px;gap:28px;padding:8px 0 1px;border-top:1px solid rgba(190,215,235,.55)}
 .runtime-dialog-actions button{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border-radius:50%;background:#eaf3fb;color:#386688;font-size:20px;font-weight:700;white-space:nowrap;box-shadow:none;transition:transform .15s ease,background .15s ease,color .15s ease,box-shadow .15s ease}
 .runtime-dialog-actions button:hover{transform:translateY(-1px);background:#e1effa}
 .runtime-dialog-actions .runtime-dialog-mic{color:#2b7fc7;background:#eaf3fb}
@@ -57,6 +57,7 @@
 .runtime-dialog-actions .runtime-dialog-primary.is-interrupt:hover{background:#e1effa;box-shadow:0 5px 12px rgba(43,155,244,.14)}
 .runtime-dialog-actions .runtime-dialog-primary.is-end{color:#d65353;background:#eaf3fb}
 .runtime-dialog-actions .runtime-dialog-primary.is-end:hover{background:#e1effa;box-shadow:0 5px 12px rgba(60,110,160,.12)}
+.runtime-end-call-icon{display:block;width:24px;height:24px;fill:currentColor}
 .runtime-dialog-actions .runtime-dialog-primary.is-text{width:auto;height:40px;min-width:92px;min-height:40px;padding:0 17px;border-radius:999px;background:var(--blue);color:#fff;font-size:12px;box-shadow:0 6px 14px rgba(43,155,244,.2)}
 .runtime-dialog-actions .runtime-dialog-primary.is-text:hover{background:var(--blue-dark)}
 .runtime-mic-toast{position:absolute;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);padding:5px 10px;border-radius:999px;background:rgba(36,59,85,.88);color:#fff;font-size:11px;line-height:1;white-space:nowrap;pointer-events:none;animation:fadein .18s ease}
