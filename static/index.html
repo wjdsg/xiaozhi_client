@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI台灯 · 三合一功能演示</title>
+<title>AI台灯</title>
 <link rel="stylesheet" href="/assets/vendor/tabler-icons.min.css">
 <link rel="stylesheet" href="/assets/runtime.css?v=20260825-original-dialog-1">
 <style>
@@ -434,6 +434,8 @@ select{border-radius:999px;border:1px solid var(--line);padding:6px 10px;font-si
 </div>
 
 <script>
+// 服务端(preview.py/bridge.py)启动时会将下方占位符替换为 config/config.json 中的真实链接
+const EXT_LINKS={finger:"__FINGER_LOOKUP_URL__",homework:"__HOMEWORK_REVIEW_URL__"};
 function mascot(s,still){
   return '<svg class="mascot" width="'+s+'" height="'+s+'" viewBox="0 0 100 100" style="'+(still?'animation:none':'')+'" aria-hidden="true">'
   +'<path d="M50 24 Q52 18 50 13" stroke="#1E88E5" stroke-width="3" fill="none" stroke-linecap="round"/>'
@@ -718,15 +720,22 @@ const Lamp=(function(){
       if(b)b.className='sim-step'+(level===i?' on':'');
     });
   }
+  function syncUrl(){
+    const p=new URLSearchParams(location.search);
+    p.set('lamp',level);
+    history.replaceState(null,'','?'+p.toString());
+  }
   return{
     init:function(){const el=document.getElementById('simLamp');if(el)el.innerHTML=svg();render();},
-    setLevel:function(v){level=Math.max(0,Math.min(3,v));render();},
+    setLevel:function(v){level=Math.max(0,Math.min(3,v));render();syncUrl();},
+    getLevel:function(){return level;},
     say:function(cmd){
       if(cmd==='开灯')level=level>0?level:2;
       else if(cmd==='关灯')level=0;
       else if(cmd==='亮一点')level=Math.min(3,level+1);
       else if(cmd==='暗一点')level=Math.max(0,level-1);
       render();
+      syncUrl();
     }
   };
 })();
@@ -735,6 +744,16 @@ const modules={dialog:Dialog,lookup:Lookup,homework:Homework};
 var currentApp='home';
 
 function homeTile(iconHtml,cls,label,sub,badge,onclick){return '<div class="home-tile '+cls+(onclick?'':' muted')+'"'+(onclick?' onclick="'+onclick+'"':'')+'>'+(badge?'<span class="home-badge">'+badge+'</span>':'')+'<div class="htico">'+iconHtml+'</div><div><div class="htlabel">'+label+'</div><div class="htsub">'+sub+'</div></div></div>';}
+function jumpTo(key){
+  const url=(EXT_LINKS&&EXT_LINKS[key])||'';
+  if(!url||url.indexOf('__')===0){
+    // 未配置链接: 回退到本地演示
+    openApp(key==='finger'?'lookup':'homework');
+    return;
+  }
+  const sep=url.indexOf('?')>=0?'&':'?';
+  window.location.href=url+sep+'lamp='+Lamp.getLevel();
+}
 function homeScreen(){
   return '<div class="home-bgwrap"><div class="home-blob hb1"></div><div class="home-blob hb2"></div><div class="home-blob hb3"></div></div>'
   +'<div class="home-page">'
@@ -743,8 +762,8 @@ function homeScreen(){
   +'<div class="home-greetline">每弄懂一道题,<b>你就厉害了一点点</b></div>'
   +'<div class="home-grid">'
   +homeTile(mascot(30,true),'home-blue','学伴对话','有问题问我',"","Runtime.openDialog('manual')")
-  +homeTile(iconLookup(),'home-green','指尖查词','点一点就查',"","openApp('lookup')")
-  +homeTile(iconHomework(),'home-amber','作业批改','拍照交作业','',"openApp('homework')")
+  +homeTile(iconLookup(),'home-green','指尖查词','点一点就查',"","jumpTo('finger')")
+  +homeTile(iconHomework(),'home-amber','作业批改','拍照交作业','',"jumpTo('homework')")
   +homeTile('<svg width="34" height="34" viewBox="0 0 48 48" aria-hidden="true"><rect x="17" y="7" width="14" height="23" rx="7" fill="#eeeaff" stroke="#6757d9" stroke-width="2.4"/><path d="M11 23c0 8 5.3 13 13 13s13-5 13-13M24 36v6M17 42h14" fill="none" stroke="#6757d9" stroke-width="2.8" stroke-linecap="round"/><path d="M20 14h8M20 19h8" stroke="#9a8eef" stroke-width="2" stroke-linecap="round"/></svg>','home-ai-tile','AI听写','拍照或教材选词',"","openDictation()")
   +'</div>'
   +'<div class="home-bar"><div class="home-bar-avatar">'+mascot(26,true)+'</div><div class="home-bar-text">说「你好灵犀」随时叫我</div><div class="home-wave"><i style="height:7px;animation-delay:0s"></i><i style="height:12px;animation-delay:.15s"></i><i style="height:9px;animation-delay:.3s"></i><i style="height:13px;animation-delay:.45s"></i></div></div>'
@@ -775,6 +794,9 @@ $('btnPlay').onclick=function(){if(currentApp==='home')return;const p=modules[cu
 $('btnRe').onclick=function(){if(currentApp==='home')return;modules[currentApp].replay();$('btnPlay').innerHTML='<i class="ti ti-player-pause" aria-hidden="true"></i> 暂停';};
 $('btnSnd').onclick=function(){Voice.on=!Voice.on;this.innerHTML=Voice.on?'<i class="ti ti-volume" aria-hidden="true"></i> 关闭语音':'<i class="ti ti-volume" aria-hidden="true"></i> 开启语音';if(currentApp!=='home')modules[currentApp].refresh();};
     Lamp.init();
+    // 从 URL 回读 lamp 参数, 实现从外部页面跳回时灯光状态延续
+    const lampMatch=location.search.match(/[?&]lamp=(\d+)/);
+    if(lampMatch)Lamp.setLevel(parseInt(lampMatch[1],10)||0);
     showHome();
 </script>
 <script src="/static/camera.js?v=20260818-1"></script>
