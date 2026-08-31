@@ -1076,10 +1076,12 @@ class WebBridge:
         }]
         await self._mcp_reply(msg_id, {"tools": tools})
 
-    async def _play_local_intent_feedback(self, response_key, subtitle):
+    async def _play_local_intent_feedback(
+        self, response_key, subtitle, discard_server_tts=True
+    ):
         """按确定顺序发送字幕并播放内存中的本地反馈音频。"""
         subtitle = subtitle or self._intent_texts.get(response_key, "")
-        self._skip_tts = True
+        self._skip_tts = discard_server_tts
         self._local_intent_feedback_active = True
         try:
             await self._broadcast_json({
@@ -1137,12 +1139,11 @@ class WebBridge:
         elif name == "light_toggle":
             if self._light_level == 0:
                 self._light_level = 3
-                result_text = "灯已打开，全亮"
                 response_key = "light_on"
             else:
                 self._light_level = 0
-                result_text = "灯已关闭"
                 response_key = "light_off"
+            result_text = self._intent_texts[response_key]
             await self._mcp_reply(msg_id, {
                 "content": [{"type": "text", "text": result_text}],
             })
@@ -1151,9 +1152,8 @@ class WebBridge:
             direction = str(args.get("direction", "up")).lower()
             level = min(3, self._light_level + 1) if direction not in ("down", "lower", "decrease") else max(0, self._light_level - 1)
             self._light_level = level
-            labels = {0: "灯已关闭", 1: "灯光已调到低档", 2: "灯光已调到中档", 3: "灯光已调到高档"}
-            result_text = labels[level]
             response_key = {0: "light_off", 1: "brightness_low", 2: "brightness_mid", 3: "brightness_high"}[level]
+            result_text = self._intent_texts[response_key]
             await self._mcp_reply(msg_id, {"content": [{"type": "text", "text": result_text}]})
             await self._broadcast_json({"type": "light_state", "level": self._light_level})
         
@@ -1161,9 +1161,8 @@ class WebBridge:
             level = int(args.get("level", 3))
             level = max(0, min(3, level))
             self._light_level = level
-            labels = {0: "灯已关闭", 1: "灯光已调到弱光", 2: "灯光已调到中等", 3: "灯光已调到全亮"}
-            result_text = labels.get(level, f"亮度已设为{level}")
             response_key = {0: "light_off", 1: "brightness_low", 2: "brightness_mid", 3: "brightness_high"}[level]
+            result_text = self._intent_texts[response_key]
             await self._mcp_reply(msg_id, {
                 "content": [{"type": "text", "text": result_text}],
             })
@@ -1189,7 +1188,12 @@ class WebBridge:
 
         if response_key:
             subtitle = self._intent_texts.get(response_key, result_text)
-            await self._play_local_intent_feedback(response_key, subtitle)
+            lamp_feedback = name in (
+                "light_toggle", "adjust_brightness", "set_brightness"
+            )
+            await self._play_local_intent_feedback(
+                response_key, subtitle, discard_server_tts=not lamp_feedback
+            )
             if self._keep_listening:
                 asyncio.create_task(self._auto_restart())
             else:
