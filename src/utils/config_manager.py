@@ -37,6 +37,16 @@ class ConfigManager:
             "KEYWORDS_THRESHOLD": 0.2,
             "NUM_TRAILING_BLANKS": 1,
         },
+        "DICTATION_OPTIONS": {
+            # 拍照听写 OCR 的 ONNX Runtime 推理线程数。
+            #   0 = 自动（不限制，让 onnxruntime 按当前机器 CPU 核数自行调度，推荐）
+            #   N = 手动指定 intra_op_num_threads=N
+            # 同一配置也通过环境变量 DICTATION_ORT_INTRA_THREADS 注入 OCR 工作子进程。
+            # 老电脑（核少）若担心 OCR 占用过多 CPU 影响实时音频，可手动调小；否则保持 0。
+            "ORT_INTRA_THREADS": 0,
+            # 拍照听写 OCR 的执行后端: "cpu" | "cuda"（需装齐 CUDA 12.x + cuDNN 9.x）
+            "ONNX_PROVIDER": "cpu",
+        },
         "CAMERA": {
             "camera_index": 0,
             "frame_width": 640,

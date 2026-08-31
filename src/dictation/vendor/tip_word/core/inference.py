@@ -68,7 +68,9 @@ class TextDetector:
                 raise FileNotFoundError(f"ONNX 模型不存在: {onnx_path}")
             from configs import ONNX_EXECUTION_PROVIDER
             sess_opt = ort.SessionOptions()
-            sess_opt.intra_op_num_threads = int(os.environ.get("DICTATION_ORT_INTRA_THREADS", "2"))
+            _ort_threads = int(os.environ.get("DICTATION_ORT_INTRA_THREADS", "0") or "0")
+            if _ort_threads > 0:
+                sess_opt.intra_op_num_threads = _ort_threads
             sess_opt.inter_op_num_threads = 1
             sess_opt.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             self._session = ort.InferenceSession(
@@ -346,7 +348,9 @@ class TextRecognizer:
             if not os.path.exists(onnx_path):
                 raise FileNotFoundError(f"ONNX 模型不存在: {onnx_path}")
             sess_opt = ort.SessionOptions()
-            sess_opt.intra_op_num_threads = int(os.environ.get("DICTATION_ORT_INTRA_THREADS", "2"))
+            _ort_threads = int(os.environ.get("DICTATION_ORT_INTRA_THREADS", "0") or "0")
+            if _ort_threads > 0:
+                sess_opt.intra_op_num_threads = _ort_threads
             sess_opt.inter_op_num_threads = 1
             sess_opt.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             from configs import ONNX_EXECUTION_PROVIDER
