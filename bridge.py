@@ -205,6 +205,7 @@ class WebBridge:
         self._feedback_triggered = False  # 每轮对话只触发一次反馈
         self._vad_has_speech = False   # 本轮聆听是否检测到过语音
         self._intent_responses = {}   # {key: numpy PCM} 意图响应预录音频
+        self._intent_feedback_lock = asyncio.Lock()  # 本地反馈音频/字幕串行播放
         self._intent_texts = {       # {key: str} 意图响应字幕文字
             "timer_set":    "好的，已设置闹钟",
             "timer_cancel": "闹钟已取消",
@@ -890,6 +891,9 @@ class WebBridge:
                     self._skip_tts = False
                 return
             text = data.get("text", "")
+            if text and state in ("start", "sentence_start"):
+                # start 常为空，实际字幕通常在 sentence_start 才带完整句子。
+                self._try_parse_light_from_text(text)
             if state == "start" and self._speech_start_time:
                 tts_latency = time.time() - self._speech_start_time
                 msg = f"首音→首句播报: {tts_latency:.2f}s text={text[:30]}"
@@ -908,7 +912,6 @@ class WebBridge:
                 if text:
                     self._try_parse_timer_from_text(text)
                     self._try_parse_cancel_from_text(text)
-                    self._try_parse_light_from_text(text)
                 asyncio.create_task(self._set_state(DeviceState.SPEAKING))  # 切到SPEAKING, 唤醒词仍活跃可打断
             if text and state != "sentence_start":
                 asyncio.create_task(self._broadcast_json(
@@ -1009,11 +1012,17 @@ class WebBridge:
         },
         {
             "name": "light_toggle",
-            "description": "切换台灯开关。",
+            "description": "控制台灯开关。明确开灯使用 state=on，明确关灯使用 state=off；仅在需要切换当前状态时使用 state=toggle。",
             "inputSchema": {
                 "type": "object",
-                "properties": {},
-                "required": [],
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": ["on", "off", "toggle"],
+                        "description": "on=开灯，off=关灯，toggle=切换当前开关状态",
+                    },
+                },
+                "required": ["state"],
             },
         },
         {
@@ -1029,13 +1038,13 @@ class WebBridge:
         },
         {
             "name": "set_brightness",
-            "description": "设置台灯亮度档位。0=关,1=弱,2=中,3=亮。",
+            "description": "仅用于设置台灯亮度档位，不用于开关台灯；开灯或关灯请使用 light_toggle。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "level": {
                         "type": "integer",
-                        "description": "亮度: 0关 1弱 2中 3亮",
+                        "description": "亮度档位：1=弱，2=中，3=亮；0仅保留兼容，开关请使用 light_toggle",
                         "minimum": 0,
                         "maximum": 3,
                     },
@@ -1080,27 +1089,39 @@ class WebBridge:
         self, response_key, subtitle, discard_server_tts=True
     ):
         """按确定顺序发送字幕并播放内存中的本地反馈音频。"""
-        subtitle = subtitle or self._intent_texts.get(response_key, "")
-        self._skip_tts = discard_server_tts
-        self._local_intent_feedback_active = True
-        try:
-            await self._broadcast_json({
-                "type": "tts", "state": "start", "local": True,
-                "turn_id": self._subtitle_turn_id,
-            })
-            if subtitle:
+        # MCP tools/call 由独立任务处理；必须把“字幕→音频→结束”作为一个整体
+        # 串行化，否则连续开关灯时会出现字幕和上一条音频错位。
+        feedback_lock = getattr(self, "_intent_feedback_lock", None)
+        if feedback_lock is None:
+            feedback_lock = asyncio.Lock()
+            self._intent_feedback_lock = feedback_lock
+
+        async with feedback_lock:
+            subtitle = subtitle or self._intent_texts.get(response_key, "")
+            self._skip_tts = discard_server_tts
+            self._local_intent_feedback_active = True
+            try:
                 await self._broadcast_json({
-                    "type": "tts", "state": "sentence_start", "text": subtitle,
-                    "local": True, "turn_id": self._subtitle_turn_id,
+                    "type": "tts", "state": "start", "local": True,
+                    "turn_id": self._subtitle_turn_id,
                 })
-            await self._set_state(DeviceState.SPEAKING)
-            await self._play_intent_response(response_key)
-        finally:
-            await self._broadcast_json({
-                "type": "tts", "state": "stop", "local": True,
-                "turn_id": self._subtitle_turn_id,
-            })
-            self._local_intent_feedback_active = False
+                if subtitle:
+                    await self._broadcast_json({
+                        "type": "tts", "state": "sentence_start", "text": subtitle,
+                        "local": True, "turn_id": self._subtitle_turn_id,
+                    })
+                await self._set_state(DeviceState.SPEAKING)
+                await self._play_intent_response(response_key)
+            finally:
+                await self._broadcast_json({
+                    "type": "tts", "state": "stop", "local": True,
+                    "turn_id": self._subtitle_turn_id,
+                })
+                self._local_intent_feedback_active = False
+                # 本地反馈对应的灯光工具不会再有服务端TTS；及时清除屏蔽标记，
+                # 避免下一轮正常回复被误吞。
+                if discard_server_tts:
+                    self._skip_tts = False
     async def _mcp_tools_call(self, msg_id, params):
         name = params.get("name", "")
         args = params.get("arguments", {})
@@ -1137,7 +1158,20 @@ class WebBridge:
             })
             await self._broadcast_json({"type": "timer_cancelled"})
         elif name == "light_toggle":
-            if self._light_level == 0:
+            state = str(args.get("state", "")).strip().lower()
+            if state not in ("on", "off", "toggle"):
+                await self._mcp_reply(
+                    msg_id, error_msg="light_toggle 必须明确提供 state：on、off 或 toggle"
+                )
+                return
+            if state == "on":
+                if self._light_level == 0:
+                    self._light_level = 3
+                response_key = "light_on"
+            elif state == "off":
+                self._light_level = 0
+                response_key = "light_off"
+            elif self._light_level == 0:
                 self._light_level = 3
                 response_key = "light_on"
             else:
@@ -1188,11 +1222,10 @@ class WebBridge:
 
         if response_key:
             subtitle = self._intent_texts.get(response_key, result_text)
-            lamp_feedback = name in (
-                "light_toggle", "adjust_brightness", "set_brightness"
-            )
+            # 灯光工具调用统一使用本地成对的音频+字幕，屏蔽服务端随后生成的
+            # TTS，避免出现“音频说全亮、字幕只说已打开”或两段音频叠加。
             await self._play_local_intent_feedback(
-                response_key, subtitle, discard_server_tts=not lamp_feedback
+                response_key, subtitle, discard_server_tts=True
             )
             if self._keep_listening:
                 asyncio.create_task(self._auto_restart())
@@ -1265,72 +1298,113 @@ class WebBridge:
         asyncio.create_task(self._apply_volume_level(level, f"volume_{level}"))
 
     def _try_light_command(self, name, args):
-        """识别灯泡控制意图"""
-        light_keywords = ("light_toggle", "light_control", "set_brightness",
-                          "light", "灯光", "灯泡", "开灯", "关灯", "亮度")
-        cn_low = ("弱", "暗", "低", "小", "暗一点", "小一点")
-        cn_mid = ("中等", "中", "适中", "中档", "中等亮度")
-        cn_high = ("全亮", "强", "高", "亮", "大", "最亮", "最高", "最大", "开", "打开", "亮一点", "亮一些")
-        cn_off = ("关", "关闭", "关掉")
-
-        if not name or not any(kw in str(name).lower() for kw in light_keywords):
+        """兼容旧 function_call；只有结构化且合法的参数才执行灯光操作。"""
+        lowered = str(name or "").strip().lower()
+        if not lowered:
             return
 
-        # 尝试从 args 获取 level
-        level = args.get("level")
-        if level is not None:
-            self._light_level = max(0, min(3, int(level)))
-            print(f"[Bridge] 意图识别灯光: level={self._light_level}")
-            asyncio.create_task(self._broadcast_json({"type": "light_state", "level": self._light_level}))
-            return
-
-        # 从 name 或 label/action 等字段解析
-        text = str(name).lower()
-        extra = str(args.get("label", "") or args.get("action", "") or args.get("state", ""))
-        combined = text + extra
-
-        if any(kw in combined for kw in cn_off):
-            self._light_level = 0
-        elif any(kw in combined for kw in cn_low):
-            self._light_level = 1
-        elif any(kw in combined for kw in cn_mid):
-            self._light_level = 2
-        elif any(kw in combined for kw in cn_high):
-            self._light_level = 3
+        if "light_toggle" in lowered:
+            state = str(args.get("state", "")).strip().lower()
+            if state == "on":
+                if self._light_level == 0:
+                    self._light_level = 3
+            elif state == "off":
+                self._light_level = 0
+            elif state == "toggle":
+                self._light_level = 0 if self._light_level > 0 else 3
+            else:
+                print(f"[Bridge] 拒绝灯光调用: light_toggle state={state!r}")
+                return
+        elif "set_brightness" in lowered:
+            try:
+                level = int(args["level"])
+            except (KeyError, TypeError, ValueError):
+                print("[Bridge] 拒绝灯光调用: set_brightness 缺少合法 level")
+                return
+            if level not in (0, 1, 2, 3):
+                print(f"[Bridge] 拒绝灯光调用: level={level}")
+                return
+            self._light_level = level
+        elif "adjust_brightness" in lowered:
+            direction = str(args.get("direction", "")).strip().lower()
+            if direction == "up":
+                self._light_level = min(3, self._light_level + 1)
+            elif direction == "down":
+                self._light_level = max(0, self._light_level - 1)
+            else:
+                print(f"[Bridge] 拒绝灯光调用: direction={direction!r}")
+                return
         else:
-            # 无法判断: toggle
-            self._light_level = 0 if self._light_level > 0 else 3
+            return
 
-        print(f"[Bridge] 意图识别灯光: level={self._light_level}")
-        asyncio.create_task(self._broadcast_json({"type": "light_state", "level": self._light_level}))
+        print(f"[Bridge] 结构化灯光调用: {lowered}, level={self._light_level}")
+        asyncio.create_task(self._broadcast_json({
+            "type": "light_state", "level": self._light_level
+        }))
 
     def _try_parse_light_from_text(self, text):
-        """从 LLM 文本回复中解析灯光命令"""
+        """只从LLM明确完成的灯光结果文本同步模拟状态。
+
+        这里只接受“灯光对象 + 已完成动作 + 结果”的组合，避免普通回复
+        中的“开/关/高/低”误触发模拟灯光。
+        """
         import re
-        cn_low = ("弱", "暗", "低", "小")
-        cn_mid = ("中等", "中", "适中")
-        cn_high = ("全亮", "最亮", "最高", "最大")
-        cn_off = ("关", "关闭", "关掉")
-        cn_on = ("开", "打开", "打开灯")
 
-        original_level = self._light_level
-
-        if any(phrase in text for phrase in cn_off):
-            self._light_level = 0
-        elif any(phrase in text for phrase in cn_low):
-            self._light_level = 1
-        elif any(phrase in text for phrase in cn_mid):
-            self._light_level = 2
-        elif any(phrase in text for phrase in cn_high):
-            self._light_level = 3
-        elif any(phrase in text for phrase in cn_on):
-            self._light_level = 3
-        else:
+        normalized = re.sub(r"[\s，。！？、,.!?；;：:\"'“”‘’]", "", str(text or ""))
+        if not normalized:
             return
 
-        if self._light_level != original_level:
-            print(f"[Bridge] 文本识别灯光: level={self._light_level} (原文: {text[:50]})")
-            asyncio.create_task(self._broadcast_json({"type": "light_state", "level": self._light_level}))
+        light_object = r"(?:灯光|台灯|亮度|灯)"
+        done = r"(?:已|已经|成功|完成)"
+        done_with_object = rf"{done}(?:帮你|为你)?(?:把|将)?"
+        result_suffix = r"(?:了|完成|好了)"
+
+        low = r"(?:低档|低档位|第一档|最低|最暗|最弱|弱光)"
+        medium = r"(?:中档|中档位|第二档|中等|适中)"
+        high = r"(?:高档|高档位|第三档|第四档|最高|最亮|最大|最强|全亮)"
+        set_level = r"(?:调到|调至|设为|设置为|切换到)"
+
+        level = None
+        if re.search(rf"{light_object}{done}(?:被)?{set_level}{low}", normalized) \
+                or re.search(rf"{done_with_object}{light_object}{set_level}{low}", normalized) \
+                or re.search(rf"{light_object}{set_level}{low}{result_suffix}", normalized):
+            level = 1
+        elif re.search(rf"{light_object}{done}(?:被)?{set_level}{medium}", normalized) \
+                or re.search(rf"{done_with_object}{light_object}{set_level}{medium}", normalized) \
+                or re.search(rf"{light_object}{set_level}{medium}{result_suffix}", normalized):
+            level = 2
+        elif re.search(rf"{light_object}{done}(?:被)?{set_level}{high}", normalized) \
+                or re.search(rf"{done_with_object}{light_object}{set_level}{high}", normalized) \
+                or re.search(rf"{light_object}{set_level}{high}{result_suffix}", normalized):
+            level = 3
+        elif re.search(rf"{light_object}{done}(?:被)?(?:关闭|关掉|关上|熄灭)", normalized) \
+                or re.search(rf"{done_with_object}(?:关闭|关掉|关上|熄灭){light_object}", normalized) \
+                or re.search(rf"{done_with_object}{light_object}(?:关闭|关掉|关上|熄灭)", normalized) \
+                or re.search(rf"{light_object}(?:关闭|关掉|关上|熄灭){result_suffix}", normalized):
+            level = 0
+        elif re.search(rf"{light_object}{done}(?:被)?(?:打开|开启|点亮)", normalized) \
+                or re.search(rf"{done_with_object}(?:打开|开启|点亮){light_object}", normalized) \
+                or re.search(rf"{done_with_object}{light_object}(?:打开|开启|点亮)", normalized) \
+                or re.search(rf"{light_object}(?:打开|开启|点亮){result_suffix}", normalized):
+            level = self._light_level if self._light_level > 0 else 3
+        elif re.search(rf"{light_object}{done}(?:被)?(?:调暗|变暗|降低)", normalized) \
+                or re.search(rf"{done_with_object}(?:调暗|变暗|降低)(?:一点)?{light_object}", normalized) \
+                or re.search(rf"{done_with_object}{light_object}(?:调暗|变暗|降低)(?:一点)?", normalized) \
+                or re.search(rf"{light_object}(?:调暗|变暗|降低)(?:一点)?{result_suffix}", normalized):
+            level = max(0, self._light_level - 1)
+        elif re.search(rf"{light_object}{done}(?:被)?(?:调亮|变亮|提高)", normalized) \
+                or re.search(rf"{done_with_object}(?:调亮|变亮|提高)(?:一点)?{light_object}", normalized) \
+                or re.search(rf"{done_with_object}{light_object}(?:调亮|变亮|提高)(?:一点)?", normalized) \
+                or re.search(rf"{light_object}(?:调亮|变亮|提高)(?:一点)?{result_suffix}", normalized):
+            level = min(3, self._light_level + 1)
+
+        if level is None or level == self._light_level:
+            return
+        self._light_level = level
+        print(f"[Bridge] 明确文本同步灯光: level={level} (原文: {str(text)[:50]})")
+        asyncio.create_task(self._broadcast_json({
+            "type": "light_state", "level": level
+        }))
 
     def _try_start_timer(self, name, args):
         """识别闹钟相关意图并启动计时"""
