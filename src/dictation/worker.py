@@ -26,8 +26,38 @@ for _stream in (sys.stdin, sys.stdout):
 for _name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
               "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
     os.environ.setdefault(_name, "1")
-os.environ.setdefault("DICTATION_ORT_INTRA_THREADS", "2")
-os.environ.setdefault("DICTATION_ONNX_PROVIDER", "cpu")
+
+
+def _load_dictation_options() -> dict:
+    """从 config/config.json 读取拍照听写 OCR 的 ONNX Runtime 配置（兜底）。
+
+    正常由主进程通过环境变量 DICTATION_ORT_INTRA_THREADS /
+    DICTATION_ONNX_PROVIDER 注入；本函数仅在工作进程被独立启动（未注入）
+    时直接读取配置文件，保证两种启动方式行为一致。
+    """
+    try:
+        from .paths import PROJECT_ROOT
+        config_path = PROJECT_ROOT / "config" / "config.json"
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        options = (raw or {}).get("DICTATION_OPTIONS", {}) or {}
+    except Exception:
+        options = {}
+    try:
+        threads = int(options.get("ORT_INTRA_THREADS", 0))
+    except (TypeError, ValueError):
+        threads = 0
+    provider = str(options.get("ONNX_PROVIDER", "cpu") or "cpu").strip().lower() or "cpu"
+    return {"threads": threads, "provider": provider}
+
+
+# OCR 推理线程数：threads<=0 表示不限制（onnxruntime 自动用满核，避免
+# 历史硬编码 "2" 在多核大小核机器上触发低线程数性能悬崖）。
+if "DICTATION_ORT_INTRA_THREADS" not in os.environ:
+    _dictation_options = _load_dictation_options()
+    if _dictation_options["threads"] > 0:
+        os.environ["DICTATION_ORT_INTRA_THREADS"] = str(_dictation_options["threads"])
+if "DICTATION_ONNX_PROVIDER" not in os.environ:
+    os.environ.setdefault("DICTATION_ONNX_PROVIDER", _load_dictation_options().get("provider", "cpu"))
 
 from .paths import SOURCES_DIR, TIP_WORD_ROOT, TTS_CACHE_DIR, ensure_runtime_dirs
 

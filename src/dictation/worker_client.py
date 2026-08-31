@@ -45,6 +45,26 @@ class DictationWorkerClient:
         dedicated = PROJECT_ROOT / ".venv-dictation" / "Scripts" / "python.exe"
         return str(dedicated) if dedicated.is_file() else sys.executable
 
+    @staticmethod
+    def _dictation_options() -> dict:
+        """从 config.json 读取拍照听写 OCR 的 ONNX Runtime 配置。
+
+        返回 {"threads": int, "provider": str}。
+        threads 语义：<=0 表示不限制线程（onnxruntime 自动用满核，推荐）；
+        大于 0 表示手动指定 intra_op_num_threads。
+        """
+        try:
+            from src.utils.config_manager import ConfigManager
+            options = ConfigManager.get_instance().get_config("DICTATION_OPTIONS", {}) or {}
+        except Exception:
+            options = {}
+        try:
+            threads = int(options.get("ORT_INTRA_THREADS", 0))
+        except (TypeError, ValueError):
+            threads = 0
+        provider = str(options.get("ONNX_PROVIDER", "cpu") or "cpu").strip().lower() or "cpu"
+        return {"threads": threads, "provider": provider}
+
     async def _start_locked(self) -> None:
         if self.running:
             return
@@ -57,8 +77,18 @@ class DictationWorkerClient:
         for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
                      "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
             env.setdefault(name, "1")
-        env.setdefault("DICTATION_ORT_INTRA_THREADS", "2")
-        env.setdefault("DICTATION_ONNX_PROVIDER", "cpu")
+        # 从 config.json 读取 OCR 推理线程数与执行后端，注入 OCR 工作子进程。
+        # 优先级：外部环境变量 > config.json > 内置默认(自动)。
+        # 仅在外部未显式设置时才按 config 注入；threads<=0 时显式移除该变量，
+        # 让 onnxruntime 使用默认调度（用满核），避免历史遗留的硬编码 "2"
+        # 在多核大小核机器上触发低线程数性能悬崖。
+        dictation_options = self._dictation_options()
+        if "DICTATION_ORT_INTRA_THREADS" not in env:
+            if dictation_options["threads"] > 0:
+                env["DICTATION_ORT_INTRA_THREADS"] = str(dictation_options["threads"])
+            else:
+                env.pop("DICTATION_ORT_INTRA_THREADS", None)
+        env.setdefault("DICTATION_ONNX_PROVIDER", dictation_options["provider"])
         kwargs = {}
         if os.name == "nt":
             kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
